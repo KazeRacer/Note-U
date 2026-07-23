@@ -1,19 +1,17 @@
 /**
  * Note-U
- * Version: 0.1.0
+ * Version: 0.2.0
  *
  * User interface controller.
  *
  * This module is responsible for:
- * - document title editing;
- * - document icon selection;
- * - favicon and browser title updates;
- * - copy-link behavior;
- * - new-note behavior;
- * - save status messages;
- * - toast notifications;
- * - top bar scroll state;
- * - textarea auto-resizing.
+ * - editing document metadata;
+ * - selecting the document icon;
+ * - updating browser metadata;
+ * - handling top bar actions;
+ * - displaying save states;
+ * - displaying toast notifications;
+ * - managing responsive interface behavior.
  */
 
 (function () {
@@ -184,7 +182,9 @@
                 document.getElementById("document-title"),
 
             iconButton:
-                document.getElementById("document-icon-button"),
+                document.getElementById(
+                    "document-icon-button"
+                ),
 
             iconDisplay:
                 document.getElementById("document-icon"),
@@ -207,13 +207,19 @@
                 document.getElementById("save-status"),
 
             copyLinkButton:
-                document.getElementById("copy-link-button"),
+                document.getElementById(
+                    "copy-link-button"
+                ),
 
             newNoteButton:
-                document.getElementById("new-note-button"),
+                document.getElementById(
+                    "new-note-button"
+                ),
 
             addBlockButton:
-                document.getElementById("add-block-button"),
+                document.getElementById(
+                    "add-block-button"
+                ),
 
             toastRegion:
                 document.getElementById("toast-region")
@@ -319,7 +325,7 @@
     }
 
     // =========================================================================
-    // Document rendering
+    // Document state
     // =========================================================================
 
     /**
@@ -361,7 +367,7 @@
     }
 
     /**
-     * Updates the current document without rendering editor blocks.
+     * Updates document metadata.
      *
      * @param {Object} partialDocument
      */
@@ -448,7 +454,7 @@
             button.setAttribute("role", "listitem");
             button.setAttribute(
                 "aria-label",
-                `Usa l'icona ${emoji}`
+                `Use ${emoji} as the note icon`
             );
 
             button.textContent = emoji;
@@ -475,9 +481,9 @@
      * Opens the emoji popover.
      */
     function openEmojiPopover() {
-        positionEmojiPopover();
-
         elements.emojiPopover.hidden = false;
+
+        positionEmojiPopover();
 
         elements.iconButton.setAttribute(
             "aria-expanded",
@@ -517,37 +523,46 @@
     }
 
     /**
-     * Positions the emoji popover next to the document icon.
+     * Positions the emoji popover.
      */
     function positionEmojiPopover() {
         const buttonRect =
             elements.iconButton.getBoundingClientRect();
 
-        const popoverWidth = Math.min(
-            318,
-            window.innerWidth - 24
-        );
+        const popoverWidth =
+            elements.emojiPopover.offsetWidth || 318;
 
-        const preferredLeft = buttonRect.left;
-        const maximumLeft =
-            window.innerWidth - popoverWidth - 12;
+        const popoverHeight =
+            elements.emojiPopover.offsetHeight || 420;
 
-        const left = Math.max(
-            12,
-            Math.min(preferredLeft, maximumLeft)
-        );
+        const viewportMargin = 12;
+        const gap = 8;
 
-        const preferredTop =
-            buttonRect.bottom + 8;
+        let left = buttonRect.left;
+        let top = buttonRect.bottom + gap;
 
-        const estimatedHeight = 360;
-        const maximumTop =
-            window.innerHeight - estimatedHeight - 12;
+        if (
+            left + popoverWidth >
+            window.innerWidth - viewportMargin
+        ) {
+            left =
+                window.innerWidth -
+                popoverWidth -
+                viewportMargin;
+        }
 
-        const top = Math.max(
-            12,
-            Math.min(preferredTop, maximumTop)
-        );
+        if (
+            top + popoverHeight >
+            window.innerHeight - viewportMargin
+        ) {
+            top =
+                buttonRect.top -
+                popoverHeight -
+                gap;
+        }
+
+        left = Math.max(viewportMargin, left);
+        top = Math.max(viewportMargin, top);
 
         elements.emojiPopover.style.left =
             `${left}px`;
@@ -556,6 +571,9 @@
             `${top}px`;
 
         elements.emojiPopover.style.right =
+            "auto";
+
+        elements.emojiPopover.style.bottom =
             "auto";
     }
 
@@ -569,9 +587,8 @@
             return;
         }
 
-        const button = event.target.closest(
-            ".emoji-button"
-        );
+        const button =
+            event.target.closest(".emoji-button");
 
         if (!(button instanceof HTMLButtonElement)) {
             return;
@@ -602,13 +619,20 @@
      * Updates the browser tab title and favicon.
      */
     function updateBrowserMetadata() {
+        if (!elements || !currentDocument) {
+            return;
+        }
+
         const title =
-            currentDocument.title.trim() || DEFAULT_TITLE;
+            currentDocument.title.trim() ||
+            DEFAULT_TITLE;
 
         const icon =
-            currentDocument.icon || DEFAULT_ICON;
+            currentDocument.icon ||
+            DEFAULT_ICON;
 
-        document.title = `${icon} ${title} · Note-U`;
+        document.title =
+            `${icon} ${title} · Note-U`;
 
         elements.favicon.href =
             createEmojiFavicon(icon);
@@ -657,6 +681,11 @@
      * Handles the copy-link button.
      */
     async function handleCopyLink() {
+        setButtonBusy(
+            elements.copyLinkButton,
+            true
+        );
+
         try {
             let url = window.location.href;
 
@@ -671,7 +700,7 @@
 
             await copyText(url);
 
-            showToast("Link copiato");
+            showToast("Link copied");
         } catch (error) {
             console.error(
                 "Note-U could not copy the document link.",
@@ -679,10 +708,15 @@
             );
 
             showToast(
-                "Impossibile copiare il link",
+                "The link could not be copied",
                 {
                     type: "error"
                 }
+            );
+        } finally {
+            setButtonBusy(
+                elements.copyLinkButton,
+                false
             );
         }
     }
@@ -695,7 +729,8 @@
     async function copyText(text) {
         if (
             navigator.clipboard &&
-            typeof navigator.clipboard.writeText === "function" &&
+            typeof navigator.clipboard.writeText ===
+                "function" &&
             window.isSecureContext
         ) {
             await navigator.clipboard.writeText(text);
@@ -706,6 +741,7 @@
             document.createElement("textarea");
 
         textarea.value = text;
+
         textarea.setAttribute(
             "aria-hidden",
             "true"
@@ -732,6 +768,20 @@
         }
     }
 
+    /**
+     * Sets the busy state of a button.
+     *
+     * @param {HTMLButtonElement} button
+     * @param {boolean} isBusy
+     */
+    function setButtonBusy(button, isBusy) {
+        button.disabled = isBusy;
+        button.setAttribute(
+            "aria-busy",
+            isBusy ? "true" : "false"
+        );
+    }
+
     // =========================================================================
     // New note
     // =========================================================================
@@ -741,13 +791,14 @@
      */
     function handleNewNote() {
         const hasContent =
-            currentDocument.title.trim() !== DEFAULT_TITLE ||
+            currentDocument.title.trim() !==
+                DEFAULT_TITLE ||
             currentDocument.icon !== DEFAULT_ICON ||
             hasMeaningfulEditorContent();
 
         if (hasContent) {
             const confirmed = window.confirm(
-                "Creare una nuova nota? La nota corrente resterà disponibile solo tramite il suo link."
+                "Create a new note? The current note will remain available only through its existing link."
             );
 
             if (!confirmed) {
@@ -768,7 +819,8 @@
     function hasMeaningfulEditorContent() {
         if (
             !window.NoteUEditor ||
-            typeof window.NoteUEditor.getDocument !== "function"
+            typeof window.NoteUEditor.getDocument !==
+                "function"
         ) {
             return false;
         }
@@ -778,23 +830,40 @@
                 window.NoteUEditor.getDocument();
 
             return editorDocument.blocks.some(
-                block => hasMeaningfulBlockContent(block)
+                block =>
+                    hasMeaningfulBlockContent(block)
             );
         } catch (error) {
+            console.error(
+                "Note-U could not inspect the editor content.",
+                error
+            );
+
             return false;
         }
     }
 
     /**
-     * Recursively checks for block content.
+     * Recursively checks for meaningful block content.
      *
      * @param {Object} block
      * @returns {boolean}
      */
     function hasMeaningfulBlockContent(block) {
+        if (block.type === "divider") {
+            return true;
+        }
+
         if (
             typeof block.content === "string" &&
             block.content.trim().length > 0
+        ) {
+            return true;
+        }
+
+        if (
+            block.type === "checklist" &&
+            block.checked
         ) {
             return true;
         }
@@ -804,7 +873,8 @@
         }
 
         return block.children.some(
-            child => hasMeaningfulBlockContent(child)
+            child =>
+                hasMeaningfulBlockContent(child)
         );
     }
 
@@ -813,12 +883,13 @@
     // =========================================================================
 
     /**
-     * Handles the add-block button.
+     * Handles the global add-block button.
      */
     function handleAddBlock() {
         if (
             window.NoteUEditor &&
-            typeof window.NoteUEditor.addBlock === "function"
+            typeof window.NoteUEditor.addBlock ===
+                "function"
         ) {
             window.NoteUEditor.addBlock({
                 focus: true
@@ -831,7 +902,7 @@
     // =========================================================================
 
     /**
-     * Closes the emoji popover when clicking outside it.
+     * Closes the emoji popover after an outside click.
      *
      * @param {PointerEvent} event
      */
@@ -845,10 +916,14 @@
         }
 
         const clickedInsidePopover =
-            elements.emojiPopover.contains(event.target);
+            elements.emojiPopover.contains(
+                event.target
+            );
 
         const clickedIconButton =
-            elements.iconButton.contains(event.target);
+            elements.iconButton.contains(
+                event.target
+            );
 
         if (
             !clickedInsidePopover &&
@@ -873,12 +948,15 @@
             event.key.toLowerCase() === "s"
         ) {
             event.preventDefault();
-            showToast("La nota è già salvata nel link");
+
+            showToast(
+                "This note is already saved inside its link"
+            );
         }
     }
 
     /**
-     * Repositions responsive UI elements.
+     * Handles viewport resizing.
      */
     function handleWindowResize() {
         resizeTitleInput();
@@ -906,8 +984,10 @@
      * Shows the saving state.
      */
     function showSavingStatus() {
+        clearTimeout(saveStatusTimer);
+
         setSaveStatus(
-            "Salvataggio…",
+            "Saving…",
             "saving"
         );
     }
@@ -917,7 +997,7 @@
      */
     function showSavedStatus() {
         setSaveStatus(
-            "Salvato nel link",
+            "Saved in link",
             "saved"
         );
 
@@ -926,7 +1006,7 @@
         saveStatusTimer = window.setTimeout(
             () => {
                 setSaveStatus(
-                    "Pronto",
+                    "Ready",
                     "idle"
                 );
             },
@@ -940,8 +1020,10 @@
      * @param {string} [message]
      */
     function showSaveError(
-        message = "Errore di salvataggio"
+        message = "Save failed"
     ) {
+        clearTimeout(saveStatusTimer);
+
         setSaveStatus(
             message,
             "error"
@@ -1044,7 +1126,7 @@
     // =========================================================================
 
     /**
-     * Notifies the application about document metadata changes.
+     * Notifies the application about metadata changes.
      *
      * @param {string} reason
      */
