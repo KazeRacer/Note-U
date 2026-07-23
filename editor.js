@@ -1,18 +1,24 @@
 /**
  * Note-U
- * Version: 0.1.0
+ * Version: 0.2.0
  *
  * Block editor engine.
  *
  * This module is responsible for:
- * - rendering document blocks from the JSON model;
- * - synchronizing editable content with the model;
- * - creating, splitting, merging, indenting, and removing blocks;
- * - managing block focus and caret position;
- * - notifying the application when the document changes.
+ * - rendering the JSON document model;
+ * - editing block content;
+ * - creating, deleting and duplicating blocks;
+ * - moving blocks;
+ * - changing block types;
+ * - splitting and merging blocks;
+ * - nesting blocks;
+ * - checklist state;
+ * - slash commands;
+ * - block action menus;
+ * - focus and caret management.
  *
- * The DOM is a rendered representation of the document model.
- * It is never used as the persistence source.
+ * The document model remains the source of truth.
+ * The DOM is only a visual representation of that model.
  */
 
 (function () {
@@ -22,23 +28,89 @@
     // Constants
     // =========================================================================
 
-    const SUPPORTED_BLOCK_TYPES = Object.freeze([
-        "paragraph"
+    const DEFAULT_BLOCK_TYPE = "paragraph";
+
+    const EDITABLE_BLOCK_TYPES = Object.freeze([
+        "paragraph",
+        "heading-1",
+        "heading-2",
+        "bullet-list",
+        "numbered-list",
+        "checklist",
+        "quote"
     ]);
 
-    const DEFAULT_BLOCK_TYPE = "paragraph";
-    const MAX_BLOCK_DEPTH = 50;
+    const BLOCK_TYPE_DEFINITIONS = Object.freeze({
+        paragraph: {
+            name: "Text",
+            description: "Plain text block",
+            icon: "T",
+            placeholder: "Type '/' for commands"
+        },
+
+        "heading-1": {
+            name: "Heading 1",
+            description: "Large section heading",
+            icon: "H1",
+            placeholder: "Heading 1"
+        },
+
+        "heading-2": {
+            name: "Heading 2",
+            description: "Medium section heading",
+            icon: "H2",
+            placeholder: "Heading 2"
+        },
+
+        "bullet-list": {
+            name: "Bulleted list",
+            description: "List with bullet points",
+            icon: "•",
+            placeholder: "List item"
+        },
+
+        "numbered-list": {
+            name: "Numbered list",
+            description: "Ordered list of items",
+            icon: "1.",
+            placeholder: "List item"
+        },
+
+        checklist: {
+            name: "Checklist",
+            description: "Track completed tasks",
+            icon: "☑",
+            placeholder: "To-do"
+        },
+
+        quote: {
+            name: "Quote",
+            description: "Highlighted quotation",
+            icon: "“",
+            placeholder: "Quote"
+        },
+
+        divider: {
+            name: "Divider",
+            description: "Horizontal separator",
+            icon: "—",
+            placeholder: ""
+        }
+    });
 
     // =========================================================================
     // Internal state
     // =========================================================================
 
-    let editorRoot = null;
-    let blockListElement = null;
-    let paragraphTemplate = null;
-
-    let documentModel = null;
+    let elements = null;
+    let currentDocument = null;
     let changeHandler = null;
+
+    let activeBlockId = null;
+    let activeMenuBlockId = null;
+    let slashMenuBlockId = null;
+    let slashMenuSelectionIndex = 0;
+    let filteredSlashCommands = [];
 
     let isInitialized = false;
     let isRendering = false;
@@ -53,7 +125,7 @@
      * @param {Object} options
      * @param {HTMLElement} options.editorRoot
      * @param {HTMLElement} options.blockListElement
-     * @param {HTMLTemplateElement} options.paragraphTemplate
+     * @param {HTMLTemplateElement} options.blockTemplate
      * @param {Object} options.documentModel
      * @param {Function} [options.onChange]
      */
@@ -64,57 +136,59 @@
             );
         }
 
-        if (!(options.editorRoot instanceof HTMLElement)) {
-            throw new TypeError(
-                "Note-U editor requires a valid editor root element."
-            );
-        }
+        elements = {
+            editorRoot: options.editorRoot,
+            blockList: options.blockListElement,
+            blockTemplate: options.blockTemplate,
+            blockMenu: document.getElementById("block-menu"),
+            blockTypeMenu: document.getElementById("block-type-menu"),
+            slashMenu: document.getElementById("slash-menu"),
+            slashMenuSearch:
+                document.getElementById("slash-menu-search"),
+            slashMenuList:
+                document.getElementById("slash-menu-list"),
+            slashMenuEmpty:
+                document.getElementById("slash-menu-empty")
+        };
 
-        if (!(options.blockListElement instanceof HTMLElement)) {
-            throw new TypeError(
-                "Note-U editor requires a valid block list element."
-            );
-        }
-
-        if (!(options.paragraphTemplate instanceof HTMLTemplateElement)) {
-            throw new TypeError(
-                "Note-U editor requires a valid paragraph template."
-            );
-        }
-
-        if (
-            !window.NoteUStorage ||
-            typeof window.NoteUStorage.normalizeDocument !== "function"
-        ) {
-            throw new Error(
-                "Note-U editor requires the storage module."
-            );
-        }
-
-        editorRoot = options.editorRoot;
-        blockListElement = options.blockListElement;
-        paragraphTemplate = options.paragraphTemplate;
+        validateElements();
 
         changeHandler =
             typeof options.onChange === "function"
                 ? options.onChange
                 : null;
 
-        documentModel = window.NoteUStorage.normalizeDocument(
-            options.documentModel
-        );
+        currentDocument =
+            window.NoteUStorage.normalizeDocument(
+                options.documentModel
+            );
 
-        bindEditorEvents();
+        bindEvents();
         render();
 
         isInitialized = true;
     }
 
     /**
+     * Validates required editor elements.
+     */
+    function validateElements() {
+        const missingElements = Object.entries(elements)
+            .filter(([, value]) => !value)
+            .map(([name]) => name);
+
+        if (missingElements.length > 0) {
+            throw new Error(
+                `Note-U editor is missing required elements: ${missingElements.join(", ")}`
+            );
+        }
+    }
+
+    /**
      * Ensures that the editor has been initialized.
      */
     function requireInitialization() {
-        if (!isInitialized && !documentModel) {
+        if (!isInitialized || !elements) {
             throw new Error(
                 "Note-U editor has not been initialized."
             );
@@ -122,185 +196,103 @@
     }
 
     // =========================================================================
-    // Event registration
+    // Event binding
     // =========================================================================
 
     /**
      * Registers editor event listeners.
      */
-    function bindEditorEvents() {
-        blockListElement.addEventListener(
+    function bindEvents() {
+        elements.blockList.addEventListener(
             "input",
             handleBlockInput
         );
 
-        blockListElement.addEventListener(
+        elements.blockList.addEventListener(
             "keydown",
             handleBlockKeyDown
         );
 
-        blockListElement.addEventListener(
+        elements.blockList.addEventListener(
+            "click",
+            handleBlockClick
+        );
+
+        elements.blockList.addEventListener(
+            "focusin",
+            handleBlockFocusIn
+        );
+
+        elements.blockList.addEventListener(
             "paste",
             handleBlockPaste
         );
 
-        blockListElement.addEventListener(
+        elements.blockMenu.addEventListener(
             "click",
-            handleBlockClick
+            handleBlockMenuClick
+        );
+
+        elements.blockTypeMenu.addEventListener(
+            "click",
+            handleBlockTypeMenuClick
+        );
+
+        elements.slashMenu.addEventListener(
+            "click",
+            handleSlashMenuClick
+        );
+
+        elements.slashMenuSearch.addEventListener(
+            "input",
+            handleSlashMenuSearch
+        );
+
+        elements.slashMenuSearch.addEventListener(
+            "keydown",
+            handleSlashMenuKeyDown
+        );
+
+        document.addEventListener(
+            "pointerdown",
+            handleDocumentPointerDown
+        );
+
+        document.addEventListener(
+            "keydown",
+            handleDocumentKeyDown
+        );
+
+        window.addEventListener(
+            "resize",
+            repositionOpenMenus
+        );
+
+        window.addEventListener(
+            "scroll",
+            repositionOpenMenus,
+            {
+                passive: true
+            }
         );
     }
 
     // =========================================================================
-    // Rendering
+    // Document API
     // =========================================================================
 
     /**
-     * Renders the complete block tree.
-     *
-     * @param {Object} [focusRequest]
-     * @param {string} focusRequest.blockId
-     * @param {number|string} [focusRequest.caret]
-     */
-    function render(focusRequest = null) {
-        if (!blockListElement || !documentModel) {
-            return;
-        }
-
-        isRendering = true;
-        blockListElement.replaceChildren();
-
-        const fragment = document.createDocumentFragment();
-
-        for (const block of documentModel.blocks) {
-            renderBlockTree(
-                block,
-                0,
-                fragment
-            );
-        }
-
-        blockListElement.appendChild(fragment);
-        isRendering = false;
-
-        if (focusRequest && focusRequest.blockId) {
-            requestAnimationFrame(() => {
-                focusBlock(
-                    focusRequest.blockId,
-                    focusRequest.caret
-                );
-            });
-        }
-    }
-
-    /**
-     * Renders one block and all of its children.
-     *
-     * @param {Object} block
-     * @param {number} depth
-     * @param {DocumentFragment|HTMLElement} container
-     */
-    function renderBlockTree(block, depth, container) {
-        const blockElement = createBlockElement(
-            block,
-            depth
-        );
-
-        container.appendChild(blockElement);
-
-        if (!Array.isArray(block.children)) {
-            return;
-        }
-
-        for (const childBlock of block.children) {
-            renderBlockTree(
-                childBlock,
-                depth + 1,
-                container
-            );
-        }
-    }
-
-    /**
-     * Creates the DOM representation of a block.
-     *
-     * @param {Object} block
-     * @param {number} depth
-     * @returns {HTMLElement}
-     */
-    function createBlockElement(block, depth) {
-        const blockType = getSupportedBlockType(block.type);
-
-        switch (blockType) {
-            case "paragraph":
-            default:
-                return createParagraphElement(
-                    block,
-                    depth
-                );
-        }
-    }
-
-    /**
-     * Creates a paragraph block element.
-     *
-     * @param {Object} block
-     * @param {number} depth
-     * @returns {HTMLElement}
-     */
-    function createParagraphElement(block, depth) {
-        const templateContent =
-            paragraphTemplate.content.cloneNode(true);
-
-        const blockElement =
-            templateContent.querySelector(".block");
-
-        const contentElement =
-            templateContent.querySelector(".block__content");
-
-        if (!blockElement || !contentElement) {
-            throw new Error(
-                "The paragraph template is invalid."
-            );
-        }
-
-        blockElement.dataset.blockId = block.id;
-        blockElement.dataset.blockType = "paragraph";
-        blockElement.dataset.depth = String(depth);
-
-        contentElement.dataset.blockId = block.id;
-        contentElement.textContent = block.content;
-
-        return blockElement;
-    }
-
-    /**
-     * Returns a supported block type.
-     *
-     * @param {*} blockType
-     * @returns {string}
-     */
-    function getSupportedBlockType(blockType) {
-        if (SUPPORTED_BLOCK_TYPES.includes(blockType)) {
-            return blockType;
-        }
-
-        return DEFAULT_BLOCK_TYPE;
-    }
-
-    // =========================================================================
-    // Model access
-    // =========================================================================
-
-    /**
-     * Returns a normalized clone of the current document.
+     * Returns a clone of the current document.
      *
      * @returns {Object}
      */
     function getDocument() {
         requireInitialization();
 
+        synchronizeModelFromDom();
+
         return window.NoteUStorage.cloneDocument(
-            documentModel
+            currentDocument
         );
     }
 
@@ -308,160 +300,175 @@
      * Replaces the current document.
      *
      * @param {*} nextDocument
-     * @param {Object|null} [focusRequest]
      */
-    function setDocument(nextDocument, focusRequest = null) {
-        documentModel = window.NoteUStorage.normalizeDocument(
-            nextDocument
-        );
+    function setDocument(nextDocument) {
+        currentDocument =
+            window.NoteUStorage.normalizeDocument(
+                nextDocument
+            );
 
-        render(focusRequest);
+        closeAllMenus();
+        render();
     }
 
     /**
-     * Finds a block and its structural context.
-     *
-     * @param {string} blockId
-     * @returns {Object|null}
+     * Renders the current document.
      */
-    function findBlockContext(blockId) {
-        if (!documentModel || typeof blockId !== "string") {
-            return null;
+    function render() {
+        if (!elements) {
+            return;
         }
 
-        return findBlockInArray(
-            documentModel.blocks,
-            blockId,
-            null,
-            0
-        );
-    }
+        isRendering = true;
 
-    /**
-     * Recursively searches for a block.
-     *
-     * @param {Array<Object>} blockArray
-     * @param {string} blockId
-     * @param {Object|null} parentBlock
-     * @param {number} depth
-     * @returns {Object|null}
-     */
-    function findBlockInArray(
-        blockArray,
-        blockId,
-        parentBlock,
-        depth
-    ) {
-        for (
-            let index = 0;
-            index < blockArray.length;
-            index += 1
-        ) {
-            const block = blockArray[index];
+        try {
+            const fragment =
+                document.createDocumentFragment();
 
-            if (block.id === blockId) {
-                return {
-                    block,
-                    blockArray,
-                    index,
-                    parentBlock,
-                    depth
-                };
-            }
-
-            if (
-                Array.isArray(block.children) &&
-                block.children.length > 0
-            ) {
-                const childResult = findBlockInArray(
-                    block.children,
-                    blockId,
-                    block,
-                    depth + 1
-                );
-
-                if (childResult) {
-                    return childResult;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Returns a flattened list of all blocks.
-     *
-     * @returns {Array<Object>}
-     */
-    function getFlattenedBlocks() {
-        const flattenedBlocks = [];
-
-        function visit(blocks, depth) {
-            for (const block of blocks) {
-                flattenedBlocks.push({
-                    block,
-                    depth
-                });
-
-                if (
-                    Array.isArray(block.children) &&
-                    block.children.length > 0
-                ) {
-                    visit(
-                        block.children,
-                        depth + 1
+            currentDocument.blocks.forEach(
+                (block, index) => {
+                    fragment.appendChild(
+                        renderBlock(block, {
+                            index,
+                            parentBlocks:
+                                currentDocument.blocks
+                        })
                     );
                 }
-            }
+            );
+
+            elements.blockList.replaceChildren(fragment);
+            updateNumberedListPrefixes();
+        } finally {
+            isRendering = false;
         }
-
-        visit(documentModel.blocks, 0);
-
-        return flattenedBlocks;
     }
 
     /**
-     * Returns the block preceding the provided block in visual order.
+     * Renders one block recursively.
      *
-     * @param {string} blockId
-     * @returns {Object|null}
+     * @param {Object} block
+     * @param {Object} context
+     * @param {number} context.index
+     * @param {Array<Object>} context.parentBlocks
+     * @returns {HTMLElement}
      */
-    function getPreviousVisibleBlock(blockId) {
-        const flattenedBlocks = getFlattenedBlocks();
+    function renderBlock(block, context) {
+        const templateContent =
+            elements.blockTemplate.content.cloneNode(true);
 
-        const currentIndex = flattenedBlocks.findIndex(
-            item => item.block.id === blockId
+        const blockElement =
+            templateContent.querySelector(".block");
+
+        const contentElement =
+            templateContent.querySelector(
+                ".block__content"
+            );
+
+        const prefixElement =
+            templateContent.querySelector(
+                ".block__prefix"
+            );
+
+        blockElement.dataset.blockId = block.id;
+        blockElement.dataset.blockType = block.type;
+
+        applyBlockTypeClass(
+            blockElement,
+            block.type
         );
 
-        if (currentIndex <= 0) {
-            return null;
+        contentElement.dataset.blockId = block.id;
+        contentElement.dataset.placeholder =
+            getBlockDefinition(block.type).placeholder;
+
+        contentElement.textContent =
+            typeof block.content === "string"
+                ? block.content
+                : "";
+
+        contentElement.setAttribute(
+            "contenteditable",
+            isEditableBlockType(block.type)
+                ? "true"
+                : "false"
+        );
+
+        if (block.type === "checklist") {
+            renderChecklistPrefix(
+                block,
+                blockElement,
+                prefixElement
+            );
         }
 
-        return flattenedBlocks[currentIndex - 1].block;
+        if (block.type === "numbered-list") {
+            prefixElement.dataset.numberedPrefix = "true";
+        }
+
+        if (block.type === "divider") {
+            contentElement.setAttribute(
+                "aria-hidden",
+                "true"
+            );
+        }
+
+        const childrenElement =
+            document.createElement("div");
+
+        childrenElement.className =
+            "block__children";
+
+        childrenElement.dataset.parentBlockId =
+            block.id;
+
+        if (Array.isArray(block.children)) {
+            block.children.forEach(
+                (childBlock, childIndex) => {
+                    childrenElement.appendChild(
+                        renderBlock(childBlock, {
+                            index: childIndex,
+                            parentBlocks:
+                                block.children
+                        })
+                    );
+                }
+            );
+        }
+
+        blockElement.appendChild(childrenElement);
+
+        return blockElement;
     }
 
     /**
-     * Returns the block following the provided block in visual order.
+     * Renders the checklist checkbox.
      *
-     * @param {string} blockId
-     * @returns {Object|null}
+     * @param {Object} block
+     * @param {HTMLElement} blockElement
+     * @param {HTMLElement} prefixElement
      */
-    function getNextVisibleBlock(blockId) {
-        const flattenedBlocks = getFlattenedBlocks();
+    function renderChecklistPrefix(
+        block,
+        blockElement,
+        prefixElement
+    ) {
+        const checkbox =
+            document.createElement("input");
 
-        const currentIndex = flattenedBlocks.findIndex(
-            item => item.block.id === blockId
+        checkbox.type = "checkbox";
+        checkbox.className = "block__checkbox";
+        checkbox.checked = Boolean(block.checked);
+        checkbox.dataset.blockId = block.id;
+        checkbox.setAttribute(
+            "aria-label",
+            "Mark task as completed"
         );
 
-        if (
-            currentIndex < 0 ||
-            currentIndex >= flattenedBlocks.length - 1
-        ) {
-            return null;
-        }
+        blockElement.dataset.checked =
+            checkbox.checked ? "true" : "false";
 
-        return flattenedBlocks[currentIndex + 1].block;
+        prefixElement.replaceChildren(checkbox);
     }
 
     // =========================================================================
@@ -469,92 +476,117 @@
     // =========================================================================
 
     /**
-     * Creates a new block.
+     * Creates a normalized block.
      *
      * @param {string} [type]
-     * @param {string} [content]
+     * @param {Object} [properties]
      * @returns {Object}
      */
     function createBlock(
         type = DEFAULT_BLOCK_TYPE,
-        content = ""
+        properties = {}
     ) {
-        return {
-            id: window.NoteUStorage.createId("block"),
-            type: getSupportedBlockType(type),
+        const normalizedType =
+            normalizeBlockType(type);
+
+        const block = {
+            id: window.NoteUStorage.createId(),
+            type: normalizedType,
             content:
-                typeof content === "string"
-                    ? content
+                typeof properties.content === "string"
+                    ? properties.content
                     : "",
-            children: []
+            children: Array.isArray(properties.children)
+                ? properties.children
+                : []
         };
+
+        if (normalizedType === "checklist") {
+            block.checked =
+                Boolean(properties.checked);
+        }
+
+        return block;
     }
 
     /**
-     * Adds a block to the end of the document.
+     * Adds a block to the root document.
      *
      * @param {Object} [options]
+     * @param {string} [options.type]
      * @param {boolean} [options.focus]
      * @returns {Object}
      */
     function addBlock(options = {}) {
         requireInitialization();
 
-        const block = createBlock();
+        synchronizeModelFromDom();
 
-        documentModel.blocks.push(block);
+        const block =
+            createBlock(options.type);
 
+        currentDocument.blocks.push(block);
+
+        render();
         notifyChange("add-block");
 
-        render(
-            options.focus === false
-                ? null
-                : {
-                    blockId: block.id,
-                    caret: 0
-                }
-        );
+        if (options.focus !== false) {
+            focusBlock(block.id);
+        }
 
         return block;
     }
 
     /**
-     * Inserts a new block after an existing block.
+     * Inserts a block after another block.
      *
      * @param {string} blockId
-     * @param {string} [content]
+     * @param {Object} [options]
+     * @param {string} [options.type]
+     * @param {string} [options.content]
+     * @param {boolean} [options.focus]
      * @returns {Object|null}
      */
-    function insertBlockAfter(blockId, content = "") {
-        const context = findBlockContext(blockId);
+    function insertBlockAfter(
+        blockId,
+        options = {}
+    ) {
+        synchronizeModelFromDom();
+
+        const context =
+            findBlockContext(blockId);
 
         if (!context) {
             return null;
         }
 
-        const newBlock = createBlock(
-            DEFAULT_BLOCK_TYPE,
-            content
-        );
+        const block =
+            createBlock(
+                options.type,
+                {
+                    content:
+                        options.content || ""
+                }
+            );
 
-        context.blockArray.splice(
+        context.parentBlocks.splice(
             context.index + 1,
             0,
-            newBlock
+            block
         );
 
+        render();
         notifyChange("insert-block");
 
-        render({
-            blockId: newBlock.id,
-            caret: 0
-        });
+        if (options.focus !== false) {
+            focusBlock(block.id);
+        }
 
-        return newBlock;
+        return block;
     }
 
     // =========================================================================
-    // Input handling
+    // Input synchronization
     // =========================================================================
 
     /**
@@ -563,256 +595,389 @@
      * @param {InputEvent} event
      */
     function handleBlockInput(event) {
-        if (isRendering) {
-            return;
-        }
-
         const contentElement =
-            getContentElementFromEvent(event);
+            getContentElementFromTarget(
+                event.target
+            );
 
         if (!contentElement) {
             return;
         }
 
-        const context = findBlockContext(
-            contentElement.dataset.blockId
-        );
+        const blockId =
+            contentElement.dataset.blockId;
+
+        const context =
+            findBlockContext(blockId);
 
         if (!context) {
             return;
         }
 
         context.block.content =
-            normalizeEditableText(contentElement.innerText);
+            getPlainText(contentElement);
 
         notifyChange("edit-block");
+
+        if (
+            context.block.content.startsWith("/") &&
+            !context.block.content.includes("\n")
+        ) {
+            openSlashMenu(
+                blockId,
+                context.block.content.slice(1)
+            );
+        } else {
+            closeSlashMenu();
+        }
     }
 
     /**
-     * Handles editor keyboard commands.
+     * Synchronizes all editable DOM content into the model.
+     */
+    function synchronizeModelFromDom() {
+        if (!elements || isRendering) {
+            return;
+        }
+
+        const contentElements =
+            elements.blockList.querySelectorAll(
+                ".block__content[data-block-id]"
+            );
+
+        for (const contentElement of contentElements) {
+            const blockId =
+                contentElement.dataset.blockId;
+
+            const context =
+                findBlockContext(blockId);
+
+            if (
+                context &&
+                isEditableBlockType(
+                    context.block.type
+                )
+            ) {
+                context.block.content =
+                    getPlainText(contentElement);
+            }
+        }
+
+        const checkboxes =
+            elements.blockList.querySelectorAll(
+                ".block__checkbox[data-block-id]"
+            );
+
+        for (const checkbox of checkboxes) {
+            const context =
+                findBlockContext(
+                    checkbox.dataset.blockId
+                );
+
+            if (context) {
+                context.block.checked =
+                    checkbox.checked;
+            }
+        }
+    }
+
+    // =========================================================================
+    // Keyboard behavior
+    // =========================================================================
+
+    /**
+     * Handles keyboard interaction inside block content.
      *
      * @param {KeyboardEvent} event
      */
     function handleBlockKeyDown(event) {
         const contentElement =
-            getContentElementFromEvent(event);
+            getContentElementFromTarget(
+                event.target
+            );
 
         if (!contentElement) {
             return;
         }
 
-        const blockId = contentElement.dataset.blockId;
+        const blockId =
+            contentElement.dataset.blockId;
 
-        switch (event.key) {
-            case "Enter":
-                handleEnterKey(
-                    event,
-                    contentElement,
-                    blockId
+        if (
+            !elements.slashMenu.hidden &&
+            slashMenuBlockId === blockId
+        ) {
+            if (
+                event.key === "ArrowDown" ||
+                event.key === "ArrowUp" ||
+                event.key === "Enter" ||
+                event.key === "Escape"
+            ) {
+                handleSlashNavigationFromEditor(
+                    event
                 );
-                break;
 
-            case "Backspace":
-                handleBackspaceKey(
-                    event,
-                    contentElement,
-                    blockId
+                return;
+            }
+        }
+
+        if (event.key === "Enter") {
+            if (event.shiftKey) {
+                return;
+            }
+
+            event.preventDefault();
+            splitBlockAtCaret(
+                blockId,
+                contentElement
+            );
+
+            return;
+        }
+
+        if (event.key === "Backspace") {
+            handleBackspaceAtBlockStart(
+                event,
+                blockId,
+                contentElement
+            );
+
+            return;
+        }
+
+        if (event.key === "Delete") {
+            handleDeleteAtBlockEnd(
+                event,
+                blockId,
+                contentElement
+            );
+
+            return;
+        }
+
+        if (event.key === "Tab") {
+            event.preventDefault();
+
+            if (event.shiftKey) {
+                outdentBlock(blockId);
+            } else {
+                indentBlock(blockId);
+            }
+
+            return;
+        }
+
+        if (
+            event.key === "ArrowUp" &&
+            isCaretAtStart(contentElement)
+        ) {
+            const previousBlock =
+                getPreviousBlock(blockId);
+
+            if (previousBlock) {
+                event.preventDefault();
+                focusBlock(
+                    previousBlock.id,
+                    "end"
                 );
-                break;
+            }
 
-            case "Delete":
-                handleDeleteKey(
-                    event,
-                    contentElement,
-                    blockId
+            return;
+        }
+
+        if (
+            event.key === "ArrowDown" &&
+            isCaretAtEnd(contentElement)
+        ) {
+            const nextBlock =
+                getNextBlock(blockId);
+
+            if (nextBlock) {
+                event.preventDefault();
+                focusBlock(
+                    nextBlock.id,
+                    "start"
                 );
-                break;
-
-            case "Tab":
-                handleTabKey(
-                    event,
-                    blockId
-                );
-                break;
-
-            case "ArrowUp":
-                handleArrowUpKey(
-                    event,
-                    contentElement,
-                    blockId
-                );
-                break;
-
-            case "ArrowDown":
-                handleArrowDownKey(
-                    event,
-                    contentElement,
-                    blockId
-                );
-                break;
-
-            default:
-                break;
+            }
         }
     }
 
     /**
-     * Handles plain-text paste inside blocks.
+     * Splits a block at the current caret position.
      *
-     * @param {ClipboardEvent} event
-     */
-    function handleBlockPaste(event) {
-        const contentElement =
-            getContentElementFromEvent(event);
-
-        if (!contentElement) {
-            return;
-        }
-
-        event.preventDefault();
-
-        const pastedText =
-            event.clipboardData?.getData("text/plain") || "";
-
-        insertPlainTextAtSelection(pastedText);
-    }
-
-    /**
-     * Handles block clicks.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleBlockClick(event) {
-        const handleButton = event.target.closest(
-            ".block__handle"
-        );
-
-        if (!handleButton) {
-            return;
-        }
-
-        const blockElement = handleButton.closest(".block");
-
-        if (!blockElement) {
-            return;
-        }
-
-        const isSelected =
-            blockElement.dataset.selected === "true";
-
-        clearBlockSelection();
-
-        if (!isSelected) {
-            blockElement.dataset.selected = "true";
-        }
-    }
-
-    // =========================================================================
-    // Enter
-    // =========================================================================
-
-    /**
-     * Splits a block when Enter is pressed.
-     *
-     * Shift+Enter inserts a line break inside the current block.
-     *
-     * @param {KeyboardEvent} event
-     * @param {HTMLElement} contentElement
      * @param {string} blockId
+     * @param {HTMLElement} contentElement
      */
-    function handleEnterKey(
-        event,
-        contentElement,
-        blockId
+    function splitBlockAtCaret(
+        blockId,
+        contentElement
     ) {
-        if (event.shiftKey) {
-            return;
-        }
+        synchronizeModelFromDom();
 
-        event.preventDefault();
-
-        const context = findBlockContext(blockId);
+        const context =
+            findBlockContext(blockId);
 
         if (!context) {
             return;
         }
 
-        const content = normalizeEditableText(
-            contentElement.innerText
-        );
-
         const caretOffset =
-            getCaretCharacterOffset(contentElement);
+            getCaretOffset(contentElement);
 
-        const contentBeforeCaret =
+        const content =
+            context.block.content || "";
+
+        const leftContent =
             content.slice(0, caretOffset);
 
-        const contentAfterCaret =
+        const rightContent =
             content.slice(caretOffset);
 
-        context.block.content = contentBeforeCaret;
+        if (
+            content.length === 0 &&
+            context.block.type !== "paragraph"
+        ) {
+            context.block.type = "paragraph";
 
-        const newBlock = createBlock(
-            DEFAULT_BLOCK_TYPE,
-            contentAfterCaret
-        );
+            if (
+                Object.prototype.hasOwnProperty.call(
+                    context.block,
+                    "checked"
+                )
+            ) {
+                delete context.block.checked;
+            }
 
-        context.blockArray.splice(
-            context.index + 1,
-            0,
-            newBlock
-        );
+            render();
+            notifyChange("reset-empty-block");
+            focusBlock(blockId, "start");
 
-        notifyChange("split-block");
-
-        render({
-            blockId: newBlock.id,
-            caret: 0
-        });
-    }
-
-    // =========================================================================
-    // Backspace and Delete
-    // =========================================================================
-
-    /**
-     * Merges a block into the previous visible block when Backspace
-     * is pressed at the beginning of the block.
-     *
-     * @param {KeyboardEvent} event
-     * @param {HTMLElement} contentElement
-     * @param {string} blockId
-     */
-    function handleBackspaceKey(
-        event,
-        contentElement,
-        blockId
-    ) {
-        if (!isSelectionCollapsed()) {
             return;
         }
 
-        const caretOffset =
-            getCaretCharacterOffset(contentElement);
+        context.block.content =
+            leftContent;
 
-        if (caretOffset !== 0) {
+        const nextBlock =
+            createBlock(
+                getContinuationBlockType(
+                    context.block.type
+                ),
+                {
+                    content: rightContent
+                }
+            );
+
+        context.parentBlocks.splice(
+            context.index + 1,
+            0,
+            nextBlock
+        );
+
+        render();
+        notifyChange("split-block");
+        focusBlock(nextBlock.id, "start");
+    }
+
+    /**
+     * Handles Backspace at the start of a block.
+     *
+     * @param {KeyboardEvent} event
+     * @param {string} blockId
+     * @param {HTMLElement} contentElement
+     */
+    function handleBackspaceAtBlockStart(
+        event,
+        blockId,
+        contentElement
+    ) {
+        if (!isCaretAtStart(contentElement)) {
+            return;
+        }
+
+        const context =
+            findBlockContext(blockId);
+
+        if (!context) {
+            return;
+        }
+
+        if (
+            context.block.content === "" &&
+            context.block.type !== "paragraph"
+        ) {
+            event.preventDefault();
+            changeBlockType(
+                blockId,
+                "paragraph"
+            );
+
             return;
         }
 
         const previousBlock =
-            getPreviousVisibleBlock(blockId);
+            getPreviousBlock(blockId);
 
         if (!previousBlock) {
             return;
         }
 
-        const context = findBlockContext(blockId);
+        event.preventDefault();
+        mergeBlockWithPrevious(blockId);
+    }
 
-        if (!context) {
+    /**
+     * Handles Delete at the end of a block.
+     *
+     * @param {KeyboardEvent} event
+     * @param {string} blockId
+     * @param {HTMLElement} contentElement
+     */
+    function handleDeleteAtBlockEnd(
+        event,
+        blockId,
+        contentElement
+    ) {
+        if (!isCaretAtEnd(contentElement)) {
+            return;
+        }
+
+        const nextBlock =
+            getNextBlock(blockId);
+
+        if (!nextBlock) {
             return;
         }
 
         event.preventDefault();
+        mergeNextBlockIntoCurrent(blockId);
+    }
+
+    // =========================================================================
+    // Block merging
+    // =========================================================================
+
+    /**
+     * Merges a block into the previous visible block.
+     *
+     * @param {string} blockId
+     */
+    function mergeBlockWithPrevious(blockId) {
+        synchronizeModelFromDom();
+
+        const context =
+            findBlockContext(blockId);
+
+        const previousBlock =
+            getPreviousBlock(blockId);
+
+        if (
+            !context ||
+            !previousBlock ||
+            previousBlock.type === "divider"
+        ) {
+            return;
+        }
 
         const previousLength =
             previousBlock.content.length;
@@ -829,338 +994,1753 @@
             );
         }
 
-        context.blockArray.splice(
+        context.parentBlocks.splice(
             context.index,
             1
         );
 
         ensureDocumentHasBlock();
-        notifyChange("merge-block-backward");
 
-        render({
-            blockId: previousBlock.id,
-            caret: previousLength
-        });
+        render();
+        notifyChange("merge-block");
+        focusBlock(
+            previousBlock.id,
+            previousLength
+        );
     }
 
     /**
-     * Merges the next visible block into the current block when Delete
-     * is pressed at the end of the current block.
+     * Merges the next visible block into the current block.
      *
-     * @param {KeyboardEvent} event
-     * @param {HTMLElement} contentElement
      * @param {string} blockId
      */
-    function handleDeleteKey(
-        event,
-        contentElement,
-        blockId
-    ) {
-        if (!isSelectionCollapsed()) {
-            return;
-        }
-
-        const currentText =
-            normalizeEditableText(
-                contentElement.innerText
-            );
-
-        const caretOffset =
-            getCaretCharacterOffset(contentElement);
-
-        if (caretOffset !== currentText.length) {
-            return;
-        }
+    function mergeNextBlockIntoCurrent(blockId) {
+        synchronizeModelFromDom();
 
         const currentContext =
             findBlockContext(blockId);
 
         const nextBlock =
-            getNextVisibleBlock(blockId);
+            getNextBlock(blockId);
 
-        if (!currentContext || !nextBlock) {
+        if (
+            !currentContext ||
+            !nextBlock ||
+            currentContext.block.type === "divider"
+        ) {
             return;
         }
-
-        const nextContext =
-            findBlockContext(nextBlock.id);
-
-        if (!nextContext) {
-            return;
-        }
-
-        event.preventDefault();
 
         const currentLength =
             currentContext.block.content.length;
 
         currentContext.block.content +=
-            nextContext.block.content;
+            nextBlock.content;
 
         if (
-            Array.isArray(nextContext.block.children) &&
-            nextContext.block.children.length > 0
+            Array.isArray(nextBlock.children) &&
+            nextBlock.children.length > 0
         ) {
             currentContext.block.children.push(
-                ...nextContext.block.children
+                ...nextBlock.children
             );
         }
 
-        nextContext.blockArray.splice(
-            nextContext.index,
-            1
-        );
-
+        removeBlockFromModel(nextBlock.id);
         ensureDocumentHasBlock();
-        notifyChange("merge-block-forward");
 
-        render({
-            blockId: currentContext.block.id,
-            caret: currentLength
-        });
+        render();
+        notifyChange("merge-next-block");
+        focusBlock(
+            currentContext.block.id,
+            currentLength
+        );
     }
 
     // =========================================================================
-    // Indentation
+    // Block deletion and duplication
     // =========================================================================
 
     /**
-     * Indents or outdents a block.
-     *
-     * Tab indents the current block.
-     * Shift+Tab outdents the current block.
-     *
-     * @param {KeyboardEvent} event
-     * @param {string} blockId
-     */
-    function handleTabKey(event, blockId) {
-        event.preventDefault();
-
-        if (event.shiftKey) {
-            outdentBlock(blockId);
-            return;
-        }
-
-        indentBlock(blockId);
-    }
-
-    /**
-     * Moves a block inside its previous sibling.
+     * Removes a block.
      *
      * @param {string} blockId
+     * @param {Object} [options]
+     * @param {boolean} [options.focus]
      * @returns {boolean}
      */
-    function indentBlock(blockId) {
-        const context = findBlockContext(blockId);
-
-        if (
-            !context ||
-            context.index === 0 ||
-            context.depth >= MAX_BLOCK_DEPTH
-        ) {
-            return false;
-        }
-
-        const previousSibling =
-            context.blockArray[context.index - 1];
-
-        const [block] = context.blockArray.splice(
-            context.index,
-            1
-        );
-
-        previousSibling.children.push(block);
-
-        notifyChange("indent-block");
-
-        render({
-            blockId,
-            caret: "end"
-        });
-
-        return true;
-    }
-
-    /**
-     * Moves a block outside its parent.
-     *
-     * @param {string} blockId
-     * @returns {boolean}
-     */
-    function outdentBlock(blockId) {
-        const context = findBlockContext(blockId);
-
-        if (!context || !context.parentBlock) {
-            return false;
-        }
-
-        const parentContext = findBlockContext(
-            context.parentBlock.id
-        );
-
-        if (!parentContext) {
-            return false;
-        }
-
-        const [block] = context.blockArray.splice(
-            context.index,
-            1
-        );
-
-        parentContext.blockArray.splice(
-            parentContext.index + 1,
-            0,
-            block
-        );
-
-        notifyChange("outdent-block");
-
-        render({
-            blockId,
-            caret: "end"
-        });
-
-        return true;
-    }
-
-    // =========================================================================
-    // Arrow navigation
-    // =========================================================================
-
-    /**
-     * Moves focus to the previous block when Arrow Up is pressed
-     * from the first visual line.
-     *
-     * @param {KeyboardEvent} event
-     * @param {HTMLElement} contentElement
-     * @param {string} blockId
-     */
-    function handleArrowUpKey(
-        event,
-        contentElement,
-        blockId
+    function removeBlock(
+        blockId,
+        options = {}
     ) {
-        const caretOffset =
-            getCaretCharacterOffset(contentElement);
-
-        if (caretOffset !== 0) {
-            return;
-        }
+        synchronizeModelFromDom();
 
         const previousBlock =
-            getPreviousVisibleBlock(blockId);
-
-        if (!previousBlock) {
-            return;
-        }
-
-        event.preventDefault();
-
-        focusBlock(
-            previousBlock.id,
-            "end"
-        );
-    }
-
-    /**
-     * Moves focus to the next block when Arrow Down is pressed
-     * from the end of the block.
-     *
-     * @param {KeyboardEvent} event
-     * @param {HTMLElement} contentElement
-     * @param {string} blockId
-     */
-    function handleArrowDownKey(
-        event,
-        contentElement,
-        blockId
-    ) {
-        const text = normalizeEditableText(
-            contentElement.innerText
-        );
-
-        const caretOffset =
-            getCaretCharacterOffset(contentElement);
-
-        if (caretOffset !== text.length) {
-            return;
-        }
+            getPreviousBlock(blockId);
 
         const nextBlock =
-            getNextVisibleBlock(blockId);
+            getNextBlock(blockId);
 
-        if (!nextBlock) {
-            return;
+        const removed =
+            removeBlockFromModel(blockId);
+
+        if (!removed) {
+            return false;
         }
 
-        event.preventDefault();
+        ensureDocumentHasBlock();
 
-        focusBlock(
-            nextBlock.id,
-            0
-        );
+        render();
+        notifyChange("delete-block");
+
+        if (options.focus !== false) {
+            const focusTarget =
+                previousBlock ||
+                nextBlock ||
+                currentDocument.blocks[0];
+
+            if (focusTarget) {
+                focusBlock(
+                    focusTarget.id,
+                    previousBlock ? "end" : "start"
+                );
+            }
+        }
+
+        return true;
     }
 
-    // =========================================================================
-    // Block removal
-    // =========================================================================
-
     /**
-     * Removes a block by identifier.
-     *
-     * Children are promoted into the removed block's position.
+     * Removes a block directly from the model.
      *
      * @param {string} blockId
      * @returns {boolean}
      */
-    function removeBlock(blockId) {
-        const context = findBlockContext(blockId);
+    function removeBlockFromModel(blockId) {
+        const context =
+            findBlockContext(blockId);
 
         if (!context) {
             return false;
         }
 
-        const previousBlock =
-            getPreviousVisibleBlock(blockId);
-
-        const nextBlock =
-            getNextVisibleBlock(blockId);
-
-        const promotedChildren =
-            Array.isArray(context.block.children)
-                ? context.block.children
-                : [];
-
-        context.blockArray.splice(
+        context.parentBlocks.splice(
             context.index,
-            1,
-            ...promotedChildren
+            1
         );
-
-        ensureDocumentHasBlock();
-        notifyChange("remove-block");
-
-        const focusTarget =
-            previousBlock ||
-            nextBlock ||
-            documentModel.blocks[0];
-
-        render({
-            blockId: focusTarget.id,
-            caret: "end"
-        });
 
         return true;
     }
 
     /**
-     * Ensures that the document contains at least one root block.
+     * Duplicates a block and its children.
+     *
+     * @param {string} blockId
+     */
+    function duplicateBlock(blockId) {
+        synchronizeModelFromDom();
+
+        const context =
+            findBlockContext(blockId);
+
+        if (!context) {
+            return;
+        }
+
+        const duplicate =
+            cloneBlockWithNewIds(
+                context.block
+            );
+
+        context.parentBlocks.splice(
+            context.index + 1,
+            0,
+            duplicate
+        );
+
+        render();
+        notifyChange("duplicate-block");
+        focusBlock(duplicate.id, "end");
+    }
+
+    /**
+     * Clones a block tree using new identifiers.
+     *
+     * @param {Object} block
+     * @returns {Object}
+     */
+    function cloneBlockWithNewIds(block) {
+        const clone = {
+            ...block,
+            id: window.NoteUStorage.createId(),
+            children: Array.isArray(block.children)
+                ? block.children.map(
+                    cloneBlockWithNewIds
+                )
+                : []
+        };
+
+        return clone;
+    }
+
+    // =========================================================================
+    // Block movement
+    // =========================================================================
+
+    /**
+     * Moves a block up among its siblings.
+     *
+     * @param {string} blockId
+     * @returns {boolean}
+     */
+    function moveBlockUp(blockId) {
+        synchronizeModelFromDom();
+
+        const context =
+            findBlockContext(blockId);
+
+        if (!context || context.index <= 0) {
+            return false;
+        }
+
+        const previousIndex =
+            context.index - 1;
+
+        [
+            context.parentBlocks[previousIndex],
+            context.parentBlocks[context.index]
+        ] = [
+            context.parentBlocks[context.index],
+            context.parentBlocks[previousIndex]
+        ];
+
+        render();
+        notifyChange("move-block-up");
+        focusBlock(blockId);
+
+        return true;
+    }
+
+    /**
+     * Moves a block down among its siblings.
+     *
+     * @param {string} blockId
+     * @returns {boolean}
+     */
+    function moveBlockDown(blockId) {
+        synchronizeModelFromDom();
+
+        const context =
+            findBlockContext(blockId);
+
+        if (
+            !context ||
+            context.index >=
+                context.parentBlocks.length - 1
+        ) {
+            return false;
+        }
+
+        const nextIndex =
+            context.index + 1;
+
+        [
+            context.parentBlocks[nextIndex],
+            context.parentBlocks[context.index]
+        ] = [
+            context.parentBlocks[context.index],
+            context.parentBlocks[nextIndex]
+        ];
+
+        render();
+        notifyChange("move-block-down");
+        focusBlock(blockId);
+
+        return true;
+    }
+
+    // =========================================================================
+    // Block nesting
+    // =========================================================================
+
+    /**
+     * Indents a block under its previous sibling.
+     *
+     * @param {string} blockId
+     * @returns {boolean}
+     */
+    function indentBlock(blockId) {
+        synchronizeModelFromDom();
+
+        const context =
+            findBlockContext(blockId);
+
+        if (!context || context.index <= 0) {
+            return false;
+        }
+
+        const previousSibling =
+            context.parentBlocks[
+                context.index - 1
+            ];
+
+        const [block] =
+            context.parentBlocks.splice(
+                context.index,
+                1
+            );
+
+        previousSibling.children =
+            Array.isArray(
+                previousSibling.children
+            )
+                ? previousSibling.children
+                : [];
+
+        previousSibling.children.push(block);
+
+        render();
+        notifyChange("indent-block");
+        focusBlock(blockId);
+
+        return true;
+    }
+
+    /**
+     * Moves a nested block one level outward.
+     *
+     * @param {string} blockId
+     * @returns {boolean}
+     */
+    function outdentBlock(blockId) {
+        synchronizeModelFromDom();
+
+        const context =
+            findBlockContext(blockId);
+
+        if (
+            !context ||
+            !context.parentBlock
+        ) {
+            return false;
+        }
+
+        const parentContext =
+            findBlockContext(
+                context.parentBlock.id
+            );
+
+        if (!parentContext) {
+            return false;
+        }
+
+        const [block] =
+            context.parentBlocks.splice(
+                context.index,
+                1
+            );
+
+        parentContext.parentBlocks.splice(
+            parentContext.index + 1,
+            0,
+            block
+        );
+
+        render();
+        notifyChange("outdent-block");
+        focusBlock(blockId);
+
+        return true;
+    }
+
+    // =========================================================================
+    // Block types
+    // =========================================================================
+
+    /**
+     * Changes a block type.
+     *
+     * @param {string} blockId
+     * @param {string} nextType
+     * @returns {boolean}
+     */
+    function changeBlockType(
+        blockId,
+        nextType
+    ) {
+        synchronizeModelFromDom();
+
+        const context =
+            findBlockContext(blockId);
+
+        if (!context) {
+            return false;
+        }
+
+        const normalizedType =
+            normalizeBlockType(nextType);
+
+        context.block.type =
+            normalizedType;
+
+        if (normalizedType === "checklist") {
+            context.block.checked =
+                Boolean(context.block.checked);
+        } else if (
+            Object.prototype.hasOwnProperty.call(
+                context.block,
+                "checked"
+            )
+        ) {
+            delete context.block.checked;
+        }
+
+        if (normalizedType === "divider") {
+            context.block.content = "";
+        }
+
+        closeAllMenus();
+        render();
+        notifyChange("change-block-type");
+
+        if (isEditableBlockType(normalizedType)) {
+            focusBlock(blockId, "end");
+        }
+
+        return true;
+    }
+
+    /**
+     * Returns the continuation type created by Enter.
+     *
+     * @param {string} blockType
+     * @returns {string}
+     */
+    function getContinuationBlockType(
+        blockType
+    ) {
+        if (
+            blockType === "bullet-list" ||
+            blockType === "numbered-list" ||
+            blockType === "checklist"
+        ) {
+            return blockType;
+        }
+
+        return "paragraph";
+    }
+
+    /**
+     * Applies a block type class.
+     *
+     * @param {HTMLElement} blockElement
+     * @param {string} blockType
+     */
+    function applyBlockTypeClass(
+        blockElement,
+        blockType
+    ) {
+        for (
+            const type of
+            Object.keys(BLOCK_TYPE_DEFINITIONS)
+        ) {
+            blockElement.classList.remove(
+                `block--${type}`
+            );
+        }
+
+        blockElement.classList.add(
+            `block--${blockType}`
+        );
+    }
+
+    /**
+     * Returns a normalized block type.
+     *
+     * @param {*} blockType
+     * @returns {string}
+     */
+    function normalizeBlockType(blockType) {
+        return Object.prototype.hasOwnProperty.call(
+            BLOCK_TYPE_DEFINITIONS,
+            blockType
+        )
+            ? blockType
+            : DEFAULT_BLOCK_TYPE;
+    }
+
+    /**
+     * Returns a block type definition.
+     *
+     * @param {string} blockType
+     * @returns {Object}
+     */
+    function getBlockDefinition(blockType) {
+        return BLOCK_TYPE_DEFINITIONS[
+            normalizeBlockType(blockType)
+        ];
+    }
+
+    /**
+     * Checks whether a block is editable.
+     *
+     * @param {string} blockType
+     * @returns {boolean}
+     */
+    function isEditableBlockType(blockType) {
+        return EDITABLE_BLOCK_TYPES.includes(
+            blockType
+        );
+    }
+
+    // =========================================================================
+    // Block click behavior
+    // =========================================================================
+
+    /**
+     * Handles block control and checkbox clicks.
+     *
+     * @param {MouseEvent} event
+     */
+    function handleBlockClick(event) {
+        if (!(event.target instanceof Element)) {
+            return;
+        }
+
+        const checkbox =
+            event.target.closest(
+                ".block__checkbox"
+            );
+
+        if (
+            checkbox instanceof
+            HTMLInputElement
+        ) {
+            handleChecklistChange(checkbox);
+            return;
+        }
+
+        const addButton =
+            event.target.closest(
+                ".block__add-button"
+            );
+
+        if (
+            addButton instanceof
+            HTMLButtonElement
+        ) {
+            const blockElement =
+                addButton.closest(".block");
+
+            if (blockElement) {
+                insertBlockAfter(
+                    blockElement.dataset.blockId,
+                    {
+                        focus: true
+                    }
+                );
+            }
+
+            return;
+        }
+
+        const handleButton =
+            event.target.closest(
+                ".block__handle"
+            );
+
+        if (
+            handleButton instanceof
+            HTMLButtonElement
+        ) {
+            const blockElement =
+                handleButton.closest(".block");
+
+            if (blockElement) {
+                openBlockMenu(
+                    blockElement.dataset.blockId,
+                    handleButton
+                );
+            }
+        }
+    }
+
+    /**
+     * Handles checklist changes.
+     *
+     * @param {HTMLInputElement} checkbox
+     */
+    function handleChecklistChange(checkbox) {
+        const blockId =
+            checkbox.dataset.blockId;
+
+        const context =
+            findBlockContext(blockId);
+
+        if (!context) {
+            return;
+        }
+
+        context.block.checked =
+            checkbox.checked;
+
+        const blockElement =
+            getBlockElement(blockId);
+
+        if (blockElement) {
+            blockElement.dataset.checked =
+                checkbox.checked
+                    ? "true"
+                    : "false";
+        }
+
+        notifyChange("toggle-checklist");
+    }
+
+    /**
+     * Tracks the active block.
+     *
+     * @param {FocusEvent} event
+     */
+    function handleBlockFocusIn(event) {
+        const blockElement =
+            getBlockElementFromTarget(
+                event.target
+            );
+
+        if (blockElement) {
+            activeBlockId =
+                blockElement.dataset.blockId;
+        }
+    }
+
+    // =========================================================================
+    // Plain-text paste
+    // =========================================================================
+
+    /**
+     * Inserts pasted content as plain text.
+     *
+     * @param {ClipboardEvent} event
+     */
+    function handleBlockPaste(event) {
+        const contentElement =
+            getContentElementFromTarget(
+                event.target
+            );
+
+        if (!contentElement) {
+            return;
+        }
+
+        event.preventDefault();
+
+        const text =
+            event.clipboardData?.getData(
+                "text/plain"
+            ) || "";
+
+        insertTextAtSelection(text);
+    }
+
+    /**
+     * Inserts text at the active selection.
+     *
+     * @param {string} text
+     */
+    function insertTextAtSelection(text) {
+        const selection =
+            window.getSelection();
+
+        if (
+            !selection ||
+            selection.rangeCount === 0
+        ) {
+            return;
+        }
+
+        const range =
+            selection.getRangeAt(0);
+
+        range.deleteContents();
+
+        const textNode =
+            document.createTextNode(text);
+
+        range.insertNode(textNode);
+        range.setStartAfter(textNode);
+        range.collapse(true);
+
+        selection.removeAllRanges();
+        selection.addRange(range);
+
+        const target =
+            range.startContainer.parentElement;
+
+        const contentElement =
+            getContentElementFromTarget(target);
+
+        if (contentElement) {
+            contentElement.dispatchEvent(
+                new InputEvent(
+                    "input",
+                    {
+                        bubbles: true,
+                        inputType:
+                            "insertFromPaste",
+                        data: text
+                    }
+                )
+            );
+        }
+    }
+
+    // =========================================================================
+    // Block action menu
+    // =========================================================================
+
+    /**
+     * Opens the block action menu.
+     *
+     * @param {string} blockId
+     * @param {HTMLElement} anchor
+     */
+    function openBlockMenu(blockId, anchor) {
+        closeAllMenus();
+
+        activeMenuBlockId = blockId;
+
+        const blockElement =
+            getBlockElement(blockId);
+
+        if (blockElement) {
+            blockElement.dataset.menuOpen =
+                "true";
+        }
+
+        const handleButton =
+            blockElement?.querySelector(
+                ".block__handle"
+            );
+
+        if (handleButton) {
+            handleButton.setAttribute(
+                "aria-expanded",
+                "true"
+            );
+        }
+
+        updateBlockMenuAvailability(blockId);
+
+        elements.blockMenu.hidden = false;
+
+        positionPopover(
+            elements.blockMenu,
+            anchor.getBoundingClientRect(),
+            {
+                horizontal: "left",
+                vertical: "bottom"
+            }
+        );
+
+        requestAnimationFrame(() => {
+            elements.blockMenu
+                .querySelector(
+                    ".block-menu__item:not([disabled])"
+                )
+                ?.focus();
+        });
+    }
+
+    /**
+     * Closes the block action menu.
+     */
+    function closeBlockMenu() {
+        if (activeMenuBlockId) {
+            const blockElement =
+                getBlockElement(
+                    activeMenuBlockId
+                );
+
+            if (blockElement) {
+                delete blockElement.dataset.menuOpen;
+
+                blockElement
+                    .querySelector(
+                        ".block__handle"
+                    )
+                    ?.setAttribute(
+                        "aria-expanded",
+                        "false"
+                    );
+            }
+        }
+
+        elements.blockMenu.hidden = true;
+        activeMenuBlockId = null;
+    }
+
+    /**
+     * Updates disabled menu actions.
+     *
+     * @param {string} blockId
+     */
+    function updateBlockMenuAvailability(blockId) {
+        const context =
+            findBlockContext(blockId);
+
+        if (!context) {
+            return;
+        }
+
+        const moveUpButton =
+            elements.blockMenu.querySelector(
+                '[data-block-action="move-up"]'
+            );
+
+        const moveDownButton =
+            elements.blockMenu.querySelector(
+                '[data-block-action="move-down"]'
+            );
+
+        moveUpButton.disabled =
+            context.index === 0;
+
+        moveDownButton.disabled =
+            context.index ===
+            context.parentBlocks.length - 1;
+    }
+
+    /**
+     * Handles block menu actions.
+     *
+     * @param {MouseEvent} event
+     */
+    function handleBlockMenuClick(event) {
+        if (!(event.target instanceof Element)) {
+            return;
+        }
+
+        const button =
+            event.target.closest(
+                "[data-block-action]"
+            );
+
+        if (
+            !(button instanceof HTMLButtonElement) ||
+            button.disabled ||
+            !activeMenuBlockId
+        ) {
+            return;
+        }
+
+        const blockId =
+            activeMenuBlockId;
+
+        const action =
+            button.dataset.blockAction;
+
+        if (action === "turn-into") {
+            openBlockTypeMenu(
+                blockId,
+                button
+            );
+
+            return;
+        }
+
+        closeBlockMenu();
+
+        if (action === "duplicate") {
+            duplicateBlock(blockId);
+        }
+
+        if (action === "move-up") {
+            moveBlockUp(blockId);
+        }
+
+        if (action === "move-down") {
+            moveBlockDown(blockId);
+        }
+
+        if (action === "delete") {
+            removeBlock(blockId);
+        }
+    }
+
+    // =========================================================================
+    // Block type menu
+    // =========================================================================
+
+    /**
+     * Opens the block type menu.
+     *
+     * @param {string} blockId
+     * @param {HTMLElement} anchor
+     */
+    function openBlockTypeMenu(
+        blockId,
+        anchor
+    ) {
+        activeMenuBlockId = blockId;
+
+        const context =
+            findBlockContext(blockId);
+
+        if (!context) {
+            return;
+        }
+
+        for (
+            const button of
+            elements.blockTypeMenu.querySelectorAll(
+                "[data-block-type]"
+            )
+        ) {
+            button.dataset.active =
+                button.dataset.blockType ===
+                context.block.type
+                    ? "true"
+                    : "false";
+        }
+
+        elements.blockTypeMenu.hidden = false;
+
+        positionPopover(
+            elements.blockTypeMenu,
+            anchor.getBoundingClientRect(),
+            {
+                horizontal: "right",
+                vertical: "top"
+            }
+        );
+
+        requestAnimationFrame(() => {
+            elements.blockTypeMenu
+                .querySelector(
+                    '[data-active="true"]'
+                )
+                ?.focus();
+        });
+    }
+
+    /**
+     * Closes the block type menu.
+     */
+    function closeBlockTypeMenu() {
+        elements.blockTypeMenu.hidden = true;
+    }
+
+    /**
+     * Handles block type selection.
+     *
+     * @param {MouseEvent} event
+     */
+    function handleBlockTypeMenuClick(event) {
+        if (!(event.target instanceof Element)) {
+            return;
+        }
+
+        const button =
+            event.target.closest(
+                "[data-block-type]"
+            );
+
+        if (
+            !(button instanceof HTMLButtonElement) ||
+            !activeMenuBlockId
+        ) {
+            return;
+        }
+
+        changeBlockType(
+            activeMenuBlockId,
+            button.dataset.blockType
+        );
+    }
+
+    // =========================================================================
+    // Slash menu
+    // =========================================================================
+
+    /**
+     * Opens the slash command menu.
+     *
+     * @param {string} blockId
+     * @param {string} searchQuery
+     */
+    function openSlashMenu(
+        blockId,
+        searchQuery = ""
+    ) {
+        slashMenuBlockId = blockId;
+        slashMenuSelectionIndex = 0;
+
+        elements.slashMenuSearch.value =
+            searchQuery;
+
+        renderSlashMenu(searchQuery);
+
+        const contentElement =
+            getContentElement(blockId);
+
+        if (!contentElement) {
+            return;
+        }
+
+        elements.slashMenu.hidden = false;
+
+        positionPopover(
+            elements.slashMenu,
+            contentElement.getBoundingClientRect(),
+            {
+                horizontal: "left",
+                vertical: "bottom"
+            }
+        );
+    }
+
+    /**
+     * Closes the slash command menu.
+     */
+    function closeSlashMenu() {
+        elements.slashMenu.hidden = true;
+        slashMenuBlockId = null;
+        slashMenuSelectionIndex = 0;
+        filteredSlashCommands = [];
+        elements.slashMenuSearch.value = "";
+    }
+
+    /**
+     * Renders slash command search results.
+     *
+     * @param {string} searchQuery
+     */
+    function renderSlashMenu(searchQuery = "") {
+        const normalizedQuery =
+            searchQuery.trim().toLowerCase();
+
+        filteredSlashCommands =
+            Object.entries(
+                BLOCK_TYPE_DEFINITIONS
+            )
+                .map(([type, definition]) => ({
+                    type,
+                    ...definition
+                }))
+                .filter(command => {
+                    if (!normalizedQuery) {
+                        return true;
+                    }
+
+                    return [
+                        command.type,
+                        command.name,
+                        command.description
+                    ].some(value =>
+                        value
+                            .toLowerCase()
+                            .includes(
+                                normalizedQuery
+                            )
+                    );
+                });
+
+        slashMenuSelectionIndex =
+            Math.min(
+                slashMenuSelectionIndex,
+                Math.max(
+                    filteredSlashCommands.length - 1,
+                    0
+                )
+            );
+
+        const fragment =
+            document.createDocumentFragment();
+
+        filteredSlashCommands.forEach(
+            (command, index) => {
+                const button =
+                    document.createElement("button");
+
+                button.type = "button";
+                button.className =
+                    "slash-menu__item";
+
+                button.dataset.blockType =
+                    command.type;
+
+                button.dataset.active =
+                    index ===
+                    slashMenuSelectionIndex
+                        ? "true"
+                        : "false";
+
+                button.setAttribute(
+                    "role",
+                    "menuitem"
+                );
+
+                const icon =
+                    document.createElement("span");
+
+                icon.className =
+                    "slash-menu__item-icon";
+
+                icon.setAttribute(
+                    "aria-hidden",
+                    "true"
+                );
+
+                icon.textContent =
+                    command.icon;
+
+                const content =
+                    document.createElement("span");
+
+                content.className =
+                    "slash-menu__item-content";
+
+                const name =
+                    document.createElement("strong");
+
+                name.className =
+                    "slash-menu__item-name";
+
+                name.textContent =
+                    command.name;
+
+                const description =
+                    document.createElement("span");
+
+                description.className =
+                    "slash-menu__item-description";
+
+                description.textContent =
+                    command.description;
+
+                content.append(
+                    name,
+                    description
+                );
+
+                button.append(
+                    icon,
+                    content
+                );
+
+                fragment.appendChild(button);
+            }
+        );
+
+        elements.slashMenuList.replaceChildren(
+            fragment
+        );
+
+        elements.slashMenuEmpty.hidden =
+            filteredSlashCommands.length > 0;
+    }
+
+    /**
+     * Handles slash menu search.
+     */
+    function handleSlashMenuSearch() {
+        slashMenuSelectionIndex = 0;
+
+        renderSlashMenu(
+            elements.slashMenuSearch.value
+        );
+    }
+
+    /**
+     * Handles slash menu keyboard navigation.
+     *
+     * @param {KeyboardEvent} event
+     */
+    function handleSlashMenuKeyDown(event) {
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+            moveSlashMenuSelection(1);
+        }
+
+        if (event.key === "ArrowUp") {
+            event.preventDefault();
+            moveSlashMenuSelection(-1);
+        }
+
+        if (event.key === "Enter") {
+            event.preventDefault();
+            selectActiveSlashCommand();
+        }
+
+        if (event.key === "Escape") {
+            event.preventDefault();
+            closeSlashMenu();
+
+            if (slashMenuBlockId) {
+                focusBlock(slashMenuBlockId);
+            }
+        }
+    }
+
+    /**
+     * Handles slash navigation while focus remains in the editor.
+     *
+     * @param {KeyboardEvent} event
+     */
+    function handleSlashNavigationFromEditor(event) {
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+            moveSlashMenuSelection(1);
+        }
+
+        if (event.key === "ArrowUp") {
+            event.preventDefault();
+            moveSlashMenuSelection(-1);
+        }
+
+        if (event.key === "Enter") {
+            event.preventDefault();
+            selectActiveSlashCommand();
+        }
+
+        if (event.key === "Escape") {
+            event.preventDefault();
+            closeSlashMenu();
+        }
+    }
+
+    /**
+     * Moves the selected slash command.
+     *
+     * @param {number} direction
+     */
+    function moveSlashMenuSelection(direction) {
+        if (
+            filteredSlashCommands.length === 0
+        ) {
+            return;
+        }
+
+        slashMenuSelectionIndex =
+            (
+                slashMenuSelectionIndex +
+                direction +
+                filteredSlashCommands.length
+            ) %
+            filteredSlashCommands.length;
+
+        updateSlashMenuSelection();
+    }
+
+    /**
+     * Updates slash menu visual selection.
+     */
+    function updateSlashMenuSelection() {
+        const buttons =
+            Array.from(
+                elements.slashMenuList.querySelectorAll(
+                    ".slash-menu__item"
+                )
+            );
+
+        buttons.forEach((button, index) => {
+            button.dataset.active =
+                index ===
+                slashMenuSelectionIndex
+                    ? "true"
+                    : "false";
+        });
+
+        buttons[
+            slashMenuSelectionIndex
+        ]?.scrollIntoView({
+            block: "nearest"
+        });
+    }
+
+    /**
+     * Applies the active slash command.
+     */
+    function selectActiveSlashCommand() {
+        const command =
+            filteredSlashCommands[
+                slashMenuSelectionIndex
+            ];
+
+        if (!command || !slashMenuBlockId) {
+            return;
+        }
+
+        applySlashCommand(
+            slashMenuBlockId,
+            command.type
+        );
+    }
+
+    /**
+     * Handles slash menu mouse selection.
+     *
+     * @param {MouseEvent} event
+     */
+    function handleSlashMenuClick(event) {
+        if (!(event.target instanceof Element)) {
+            return;
+        }
+
+        const button =
+            event.target.closest(
+                "[data-block-type]"
+            );
+
+        if (
+            !(button instanceof HTMLButtonElement) ||
+            !slashMenuBlockId
+        ) {
+            return;
+        }
+
+        applySlashCommand(
+            slashMenuBlockId,
+            button.dataset.blockType
+        );
+    }
+
+    /**
+     * Applies a slash command to a block.
+     *
+     * @param {string} blockId
+     * @param {string} blockType
+     */
+    function applySlashCommand(
+        blockId,
+        blockType
+    ) {
+        const context =
+            findBlockContext(blockId);
+
+        if (!context) {
+            return;
+        }
+
+        context.block.content = "";
+
+        closeSlashMenu();
+
+        changeBlockType(
+            blockId,
+            blockType
+        );
+    }
+
+    // =========================================================================
+    // Menu closing and positioning
+    // =========================================================================
+
+    /**
+     * Closes all editor menus.
+     */
+    function closeAllMenus() {
+        closeBlockTypeMenu();
+        closeBlockMenu();
+        closeSlashMenu();
+    }
+
+    /**
+     * Closes menus when clicking outside them.
+     *
+     * @param {PointerEvent} event
+     */
+    function handleDocumentPointerDown(event) {
+        if (!(event.target instanceof Node)) {
+            return;
+        }
+
+        const insideBlockMenu =
+            elements.blockMenu.contains(
+                event.target
+            );
+
+        const insideBlockTypeMenu =
+            elements.blockTypeMenu.contains(
+                event.target
+            );
+
+        const insideSlashMenu =
+            elements.slashMenu.contains(
+                event.target
+            );
+
+        const insideBlockHandle =
+            event.target instanceof Element &&
+            Boolean(
+                event.target.closest(
+                    ".block__handle"
+                )
+            );
+
+        if (
+            !insideBlockMenu &&
+            !insideBlockTypeMenu &&
+            !insideBlockHandle
+        ) {
+            closeBlockTypeMenu();
+            closeBlockMenu();
+        }
+
+        if (!insideSlashMenu) {
+            const contentElement =
+                getContentElementFromTarget(
+                    event.target
+                );
+
+            if (
+                !contentElement ||
+                contentElement.dataset.blockId !==
+                    slashMenuBlockId
+            ) {
+                closeSlashMenu();
+            }
+        }
+    }
+
+    /**
+     * Handles global menu keyboard behavior.
+     *
+     * @param {KeyboardEvent} event
+     */
+    function handleDocumentKeyDown(event) {
+        if (event.key !== "Escape") {
+            return;
+        }
+
+        closeAllMenus();
+    }
+
+    /**
+     * Repositions menus that are currently open.
+     */
+    function repositionOpenMenus() {
+        if (
+            !elements.blockMenu.hidden &&
+            activeMenuBlockId
+        ) {
+            const handle =
+                getBlockElement(
+                    activeMenuBlockId
+                )?.querySelector(
+                    ".block__handle"
+                );
+
+            if (handle) {
+                positionPopover(
+                    elements.blockMenu,
+                    handle.getBoundingClientRect(),
+                    {
+                        horizontal: "left",
+                        vertical: "bottom"
+                    }
+                );
+            }
+        }
+
+        if (
+            !elements.slashMenu.hidden &&
+            slashMenuBlockId
+        ) {
+            const content =
+                getContentElement(
+                    slashMenuBlockId
+                );
+
+            if (content) {
+                positionPopover(
+                    elements.slashMenu,
+                    content.getBoundingClientRect(),
+                    {
+                        horizontal: "left",
+                        vertical: "bottom"
+                    }
+                );
+            }
+        }
+    }
+
+    /**
+     * Positions a popover inside the viewport.
+     *
+     * @param {HTMLElement} popover
+     * @param {DOMRect} anchorRect
+     * @param {Object} options
+     * @param {string} options.horizontal
+     * @param {string} options.vertical
+     */
+    function positionPopover(
+        popover,
+        anchorRect,
+        options
+    ) {
+        const margin = 10;
+        const gap = 6;
+
+        const popoverRect =
+            popover.getBoundingClientRect();
+
+        let left =
+            options.horizontal === "right"
+                ? anchorRect.right + gap
+                : anchorRect.left;
+
+        let top =
+            options.vertical === "top"
+                ? anchorRect.top
+                : anchorRect.bottom + gap;
+
+        if (
+            left + popoverRect.width >
+            window.innerWidth - margin
+        ) {
+            left =
+                window.innerWidth -
+                popoverRect.width -
+                margin;
+        }
+
+        if (left < margin) {
+            left = margin;
+        }
+
+        if (
+            top + popoverRect.height >
+            window.innerHeight - margin
+        ) {
+            top =
+                anchorRect.top -
+                popoverRect.height -
+                gap;
+        }
+
+        if (top < margin) {
+            top = margin;
+        }
+
+        popover.style.left = `${left}px`;
+        popover.style.top = `${top}px`;
+        popover.style.right = "auto";
+        popover.style.bottom = "auto";
+    }
+
+    // =========================================================================
+    // Block traversal
+    // =========================================================================
+
+    /**
+     * Finds a block and its structural context.
+     *
+     * @param {string} blockId
+     * @returns {Object|null}
+     */
+    function findBlockContext(blockId) {
+        return findBlockContextRecursive(
+            currentDocument.blocks,
+            blockId,
+            null
+        );
+    }
+
+    /**
+     * Recursively finds a block context.
+     *
+     * @param {Array<Object>} blocks
+     * @param {string} blockId
+     * @param {Object|null} parentBlock
+     * @returns {Object|null}
+     */
+    function findBlockContextRecursive(
+        blocks,
+        blockId,
+        parentBlock
+    ) {
+        for (
+            let index = 0;
+            index < blocks.length;
+            index += 1
+        ) {
+            const block = blocks[index];
+
+            if (block.id === blockId) {
+                return {
+                    block,
+                    index,
+                    parentBlocks: blocks,
+                    parentBlock
+                };
+            }
+
+            if (
+                Array.isArray(block.children) &&
+                block.children.length > 0
+            ) {
+                const childContext =
+                    findBlockContextRecursive(
+                        block.children,
+                        blockId,
+                        block
+                    );
+
+                if (childContext) {
+                    return childContext;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Returns blocks in visual order.
+     *
+     * @returns {Array<Object>}
+     */
+    function getFlattenedBlocks() {
+        const result = [];
+
+        function visit(blocks) {
+            for (const block of blocks) {
+                result.push(block);
+
+                if (
+                    Array.isArray(block.children) &&
+                    block.children.length > 0
+                ) {
+                    visit(block.children);
+                }
+            }
+        }
+
+        visit(currentDocument.blocks);
+
+        return result;
+    }
+
+    /**
+     * Returns the previous visible block.
+     *
+     * @param {string} blockId
+     * @returns {Object|null}
+     */
+    function getPreviousBlock(blockId) {
+        const blocks =
+            getFlattenedBlocks();
+
+        const index =
+            blocks.findIndex(
+                block => block.id === blockId
+            );
+
+        return index > 0
+            ? blocks[index - 1]
+            : null;
+    }
+
+    /**
+     * Returns the next visible block.
+     *
+     * @param {string} blockId
+     * @returns {Object|null}
+     */
+    function getNextBlock(blockId) {
+        const blocks =
+            getFlattenedBlocks();
+
+        const index =
+            blocks.findIndex(
+                block => block.id === blockId
+            );
+
+        return (
+            index >= 0 &&
+            index < blocks.length - 1
+        )
+            ? blocks[index + 1]
+            : null;
+    }
+
+    /**
+     * Ensures the document always contains one block.
      */
     function ensureDocumentHasBlock() {
-        if (documentModel.blocks.length === 0) {
-            documentModel.blocks.push(
+        if (
+            currentDocument.blocks.length === 0
+        ) {
+            currentDocument.blocks.push(
                 createBlock()
             );
+        }
+    }
+
+    // =========================================================================
+    // Numbered lists
+    // =========================================================================
+
+    /**
+     * Updates visible numbered-list prefixes.
+     */
+    function updateNumberedListPrefixes() {
+        updateNumberedPrefixesInContainer(
+            elements.blockList
+        );
+    }
+
+    /**
+     * Updates numbered prefixes inside one container.
+     *
+     * @param {HTMLElement} container
+     */
+    function updateNumberedPrefixesInContainer(
+        container
+    ) {
+        let currentNumber = 0;
+
+        const blockElements =
+            Array.from(
+                container.children
+            ).filter(element =>
+                element.classList?.contains(
+                    "block"
+                )
+            );
+
+        for (const blockElement of blockElements) {
+            const prefix =
+                blockElement.querySelector(
+                    ":scope > .block__body > .block__prefix"
+                );
+
+            if (
+                blockElement.dataset.blockType ===
+                "numbered-list"
+            ) {
+                currentNumber += 1;
+
+                if (prefix) {
+                    prefix.textContent =
+                        `${currentNumber}.`;
+                }
+            } else {
+                currentNumber = 0;
+            }
+
+            const children =
+                blockElement.querySelector(
+                    ":scope > .block__children"
+                );
+
+            if (children) {
+                updateNumberedPrefixesInContainer(
+                    children
+                );
+            }
         }
     }
 
@@ -1169,97 +2749,102 @@
     // =========================================================================
 
     /**
-     * Focuses a block and places the caret.
+     * Focuses a block.
      *
      * @param {string} blockId
-     * @param {number|string} [caret]
+     * @param {"start"|"end"|number} [position]
      * @returns {boolean}
      */
-    function focusBlock(blockId, caret = "end") {
-        if (!blockListElement) {
-            return false;
-        }
-
-        const selector =
-            `.block__content[data-block-id="${escapeSelector(blockId)}"]`;
-
+    function focusBlock(
+        blockId,
+        position = "end"
+    ) {
         const contentElement =
-            blockListElement.querySelector(selector);
+            getContentElement(blockId);
 
-        if (!contentElement) {
+        if (
+            !contentElement ||
+            contentElement.getAttribute(
+                "contenteditable"
+            ) !== "true"
+        ) {
             return false;
         }
 
         contentElement.focus();
 
-        let caretOffset;
+        const textLength =
+            getPlainText(contentElement).length;
 
-        if (caret === "end") {
-            caretOffset =
-                normalizeEditableText(
-                    contentElement.innerText
-                ).length;
+        let offset = textLength;
+
+        if (position === "start") {
+            offset = 0;
         } else if (
-            typeof caret === "number" &&
-            Number.isFinite(caret)
+            typeof position === "number"
         ) {
-            caretOffset = Math.max(0, caret);
-        } else {
-            caretOffset = 0;
+            offset = Math.max(
+                0,
+                Math.min(position, textLength)
+            );
         }
 
-        setCaretCharacterOffset(
+        setCaretOffset(
             contentElement,
-            caretOffset
+            offset
         );
+
+        activeBlockId = blockId;
 
         return true;
     }
 
     /**
-     * Focuses the first block.
+     * Focuses the first editable block.
      *
      * @returns {boolean}
      */
     function focusFirstBlock() {
-        const firstBlock = getFlattenedBlocks()[0];
+        const block =
+            getFlattenedBlocks().find(
+                item =>
+                    isEditableBlockType(item.type)
+            );
 
-        if (!firstBlock) {
-            return false;
-        }
-
-        return focusBlock(
-            firstBlock.block.id,
-            0
-        );
+        return block
+            ? focusBlock(block.id, "start")
+            : false;
     }
 
     /**
-     * Focuses the last block.
+     * Focuses the last editable block.
      *
      * @returns {boolean}
      */
     function focusLastBlock() {
-        const flattenedBlocks = getFlattenedBlocks();
+        const blocks =
+            getFlattenedBlocks().filter(
+                item =>
+                    isEditableBlockType(item.type)
+            );
 
-        if (flattenedBlocks.length === 0) {
-            return false;
-        }
+        const block =
+            blocks[blocks.length - 1];
 
-        return focusBlock(
-            flattenedBlocks[flattenedBlocks.length - 1].block.id,
-            "end"
-        );
+        return block
+            ? focusBlock(block.id, "end")
+            : false;
     }
 
     /**
-     * Returns the caret character offset inside an element.
+     * Returns the caret text offset.
      *
      * @param {HTMLElement} element
      * @returns {number}
      */
-    function getCaretCharacterOffset(element) {
-        const selection = window.getSelection();
+    function getCaretOffset(element) {
+        const selection =
+            window.getSelection();
 
         if (
             !selection ||
@@ -1268,72 +2853,67 @@
             return 0;
         }
 
-        const activeRange = selection.getRangeAt(0);
+        const range =
+            selection.getRangeAt(0);
 
-        if (!element.contains(activeRange.startContainer)) {
+        if (!element.contains(range.startContainer)) {
             return 0;
         }
 
-        const measurementRange =
-            activeRange.cloneRange();
+        const precedingRange =
+            range.cloneRange();
 
-        measurementRange.selectNodeContents(element);
-        measurementRange.setEnd(
-            activeRange.startContainer,
-            activeRange.startOffset
+        precedingRange.selectNodeContents(element);
+        precedingRange.setEnd(
+            range.startContainer,
+            range.startOffset
         );
 
-        return measurementRange.toString().length;
+        return precedingRange.toString().length;
     }
 
     /**
-     * Places the caret at a character offset.
+     * Sets the caret text offset.
      *
      * @param {HTMLElement} element
-     * @param {number} requestedOffset
+     * @param {number} offset
      */
-    function setCaretCharacterOffset(
-        element,
-        requestedOffset
-    ) {
-        const selection = window.getSelection();
+    function setCaretOffset(element, offset) {
+        const range =
+            document.createRange();
 
-        if (!selection) {
-            return;
-        }
+        const selection =
+            window.getSelection();
 
-        const range = document.createRange();
-        const walker = document.createTreeWalker(
-            element,
-            NodeFilter.SHOW_TEXT
-        );
+        const walker =
+            document.createTreeWalker(
+                element,
+                NodeFilter.SHOW_TEXT
+            );
 
-        let remainingOffset = Math.max(
-            0,
-            requestedOffset
-        );
+        let remaining = offset;
+        let node = walker.nextNode();
 
-        let textNode = walker.nextNode();
+        while (node) {
+            const length =
+                node.textContent.length;
 
-        while (textNode) {
-            const textLength =
-                textNode.nodeValue?.length || 0;
-
-            if (remainingOffset <= textLength) {
+            if (remaining <= length) {
                 range.setStart(
-                    textNode,
-                    remainingOffset
+                    node,
+                    remaining
                 );
 
                 range.collapse(true);
+
                 selection.removeAllRanges();
                 selection.addRange(range);
 
                 return;
             }
 
-            remainingOffset -= textLength;
-            textNode = walker.nextNode();
+            remaining -= length;
+            node = walker.nextNode();
         }
 
         range.selectNodeContents(element);
@@ -1344,66 +2924,26 @@
     }
 
     /**
-     * Checks whether the active selection is collapsed.
+     * Checks whether the caret is at the start.
      *
+     * @param {HTMLElement} element
      * @returns {boolean}
      */
-    function isSelectionCollapsed() {
-        const selection = window.getSelection();
-
-        return Boolean(
-            selection &&
-            selection.rangeCount > 0 &&
-            selection.isCollapsed
-        );
+    function isCaretAtStart(element) {
+        return getCaretOffset(element) === 0;
     }
 
-    // =========================================================================
-    // Clipboard helpers
-    // =========================================================================
-
     /**
-     * Inserts plain text at the current selection.
+     * Checks whether the caret is at the end.
      *
-     * @param {string} text
+     * @param {HTMLElement} element
+     * @returns {boolean}
      */
-    function insertPlainTextAtSelection(text) {
-        const selection = window.getSelection();
-
-        if (
-            !selection ||
-            selection.rangeCount === 0
-        ) {
-            return;
-        }
-
-        const range = selection.getRangeAt(0);
-
-        range.deleteContents();
-
-        const textNode = document.createTextNode(text);
-
-        range.insertNode(textNode);
-        range.setStartAfter(textNode);
-        range.collapse(true);
-
-        selection.removeAllRanges();
-        selection.addRange(range);
-
-        const activeElement = document.activeElement;
-
-        if (
-            activeElement instanceof HTMLElement &&
-            activeElement.matches(".block__content")
-        ) {
-            activeElement.dispatchEvent(
-                new InputEvent("input", {
-                    bubbles: true,
-                    inputType: "insertFromPaste",
-                    data: text
-                })
-            );
-        }
+    function isCaretAtEnd(element) {
+        return (
+            getCaretOffset(element) ===
+            getPlainText(element).length
+        );
     }
 
     // =========================================================================
@@ -1411,45 +2951,73 @@
     // =========================================================================
 
     /**
-     * Returns the editable block content element for an event.
+     * Returns a block element.
      *
-     * @param {Event} event
+     * @param {string} blockId
      * @returns {HTMLElement|null}
      */
-    function getContentElementFromEvent(event) {
-        if (!(event.target instanceof Element)) {
+    function getBlockElement(blockId) {
+        return elements.blockList.querySelector(
+            `.block[data-block-id="${escapeSelector(blockId)}"]`
+        );
+    }
+
+    /**
+     * Returns a content element.
+     *
+     * @param {string} blockId
+     * @returns {HTMLElement|null}
+     */
+    function getContentElement(blockId) {
+        return elements.blockList.querySelector(
+            `.block__content[data-block-id="${escapeSelector(blockId)}"]`
+        );
+    }
+
+    /**
+     * Finds the closest block element.
+     *
+     * @param {*} target
+     * @returns {HTMLElement|null}
+     */
+    function getBlockElementFromTarget(target) {
+        if (!(target instanceof Element)) {
             return null;
         }
 
-        const contentElement = event.target.closest(
+        return target.closest(".block");
+    }
+
+    /**
+     * Finds the closest content element.
+     *
+     * @param {*} target
+     * @returns {HTMLElement|null}
+     */
+    function getContentElementFromTarget(target) {
+        if (!(target instanceof Element)) {
+            return null;
+        }
+
+        return target.closest(
             ".block__content"
         );
-
-        return contentElement instanceof HTMLElement
-            ? contentElement
-            : null;
     }
 
     /**
-     * Clears visual block selection.
+     * Returns normalized plain text from a content element.
+     *
+     * @param {HTMLElement} element
+     * @returns {string}
      */
-    function clearBlockSelection() {
-        if (!blockListElement) {
-            return;
-        }
-
-        const selectedBlocks =
-            blockListElement.querySelectorAll(
-                '.block[data-selected="true"]'
-            );
-
-        for (const blockElement of selectedBlocks) {
-            delete blockElement.dataset.selected;
-        }
+    function getPlainText(element) {
+        return element.innerText
+            .replace(/\r\n/g, "\n")
+            .replace(/\u00a0/g, " ");
     }
 
     /**
-     * Escapes a value for use inside a CSS selector.
+     * Escapes text for a CSS selector.
      *
      * @param {string} value
      * @returns {string}
@@ -1462,26 +3030,10 @@
             return window.CSS.escape(value);
         }
 
-        return value.replace(
+        return String(value).replace(
             /["\\]/g,
             "\\$&"
         );
-    }
-
-    /**
-     * Normalizes text extracted from a contenteditable element.
-     *
-     * @param {*} value
-     * @returns {string}
-     */
-    function normalizeEditableText(value) {
-        if (typeof value !== "string") {
-            return "";
-        }
-
-        return value
-            .replace(/\r\n?/g, "\n")
-            .replace(/\u00a0/g, " ");
     }
 
     // =========================================================================
@@ -1489,25 +3041,7 @@
     // =========================================================================
 
     /**
-     * Notifies the application that the document has changed.
-     *
-     * @param {string} reason
-     */
-    function notifyChange(reason) {
-        if (!changeHandler) {
-            return;
-        }
-
-        changeHandler(
-            getDocument(),
-            {
-                reason
-            }
-        );
-    }
-
-    /**
-     * Replaces the editor change handler.
+     * Registers a document change handler.
      *
      * @param {Function|null} handler
      */
@@ -1518,30 +3052,60 @@
                 : null;
     }
 
+    /**
+     * Notifies the application about a change.
+     *
+     * @param {string} reason
+     */
+    function notifyChange(reason) {
+        if (
+            !changeHandler ||
+            isRendering
+        ) {
+            return;
+        }
+
+        changeHandler(
+            window.NoteUStorage.cloneDocument(
+                currentDocument
+            ),
+            {
+                reason,
+                activeBlockId
+            }
+        );
+    }
+
     // =========================================================================
     // Public API
     // =========================================================================
 
     window.NoteUEditor = Object.freeze({
         initialize,
+        render,
 
         getDocument,
         setDocument,
-        render,
 
         createBlock,
         addBlock,
         insertBlockAfter,
         removeBlock,
+        duplicateBlock,
+
+        moveBlockUp,
+        moveBlockDown,
 
         indentBlock,
         outdentBlock,
+
+        changeBlockType,
+        findBlockContext,
 
         focusBlock,
         focusFirstBlock,
         focusLastBlock,
 
-        findBlockContext,
         setChangeHandler
     });
 })();
