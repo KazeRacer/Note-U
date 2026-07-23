@@ -1,1 +1,857 @@
+/**
+ * Note-U
+ * Versione: 0.1.0
+ *
+ * Foglio di stile principale.
+ */
 
+/* ==========================================================================
+   Variabili
+   ========================================================================== */
+
+:root {
+    color-scheme: light;
+
+    --font-sans:
+        Inter,
+        ui-sans-serif,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        Helvetica,
+        Arial,
+        sans-serif,
+        "Apple Color Emoji",
+        "Segoe UI Emoji";
+
+    --page-background: #fbfaf8;
+    --surface: #ffffff;
+    --surface-subtle: #f5f3ef;
+    --surface-hover: #efede8;
+    --surface-active: #e7e4dd;
+
+    --text-primary: #292827;
+    --text-secondary: #706e69;
+    --text-muted: #9a9790;
+    --text-placeholder: #aaa7a0;
+
+    --border-soft: rgba(41, 40, 39, 0.09);
+    --border-medium: rgba(41, 40, 39, 0.16);
+
+    --accent: #3366ff;
+    --accent-hover: #2857e5;
+    --accent-soft: rgba(51, 102, 255, 0.1);
+
+    --success: #16825d;
+    --danger: #c54141;
+
+    --shadow-popover:
+        0 18px 50px rgba(35, 33, 29, 0.14),
+        0 3px 12px rgba(35, 33, 29, 0.08);
+
+    --document-width: 760px;
+    --document-padding-inline: 34px;
+
+    --radius-small: 6px;
+    --radius-medium: 10px;
+    --radius-large: 16px;
+
+    --transition-fast: 120ms ease;
+    --transition-medium: 200ms ease;
+}
+
+/* ==========================================================================
+   Reset
+   ========================================================================== */
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html {
+    min-width: 320px;
+    min-height: 100%;
+    background: var(--page-background);
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+}
+
+body {
+    min-width: 320px;
+    min-height: 100vh;
+    margin: 0;
+    overflow-x: hidden;
+    background: var(--page-background);
+    color: var(--text-primary);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+textarea,
+input,
+select {
+    color: inherit;
+    font: inherit;
+}
+
+button {
+    border: 0;
+}
+
+button,
+a {
+    -webkit-tap-highlight-color: transparent;
+}
+
+button:not(:disabled),
+a {
+    cursor: pointer;
+}
+
+button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+textarea {
+    resize: none;
+}
+
+::selection {
+    background: rgba(51, 102, 255, 0.18);
+}
+
+/* ==========================================================================
+   Accessibilità
+   ========================================================================== */
+
+.visually-hidden {
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+:focus-visible {
+    outline: 3px solid var(--accent-soft);
+    outline-offset: 2px;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+/* ==========================================================================
+   Applicazione
+   ========================================================================== */
+
+.app-shell {
+    display: flex;
+    min-height: 100vh;
+    flex-direction: column;
+}
+
+.noscript-message {
+    padding: 12px 20px;
+    background: #fff3cd;
+    color: #664d03;
+    text-align: center;
+}
+
+/* ==========================================================================
+   Barra superiore
+   ========================================================================== */
+
+.topbar {
+    position: sticky;
+    z-index: 50;
+    top: 0;
+    flex: 0 0 auto;
+    border-bottom: 1px solid transparent;
+    background: rgba(251, 250, 248, 0.88);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    transition:
+        border-color var(--transition-medium),
+        box-shadow var(--transition-medium);
+}
+
+.topbar--scrolled {
+    border-bottom-color: var(--border-soft);
+    box-shadow: 0 1px 8px rgba(35, 33, 29, 0.035);
+}
+
+.topbar__inner {
+    display: flex;
+    width: 100%;
+    min-height: 58px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 8px 18px;
+}
+
+.brand {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 9px;
+    border-radius: var(--radius-small);
+    color: var(--text-primary);
+    text-decoration: none;
+}
+
+.brand__mark {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+    place-items: center;
+    border: 1px solid var(--border-medium);
+    border-radius: 8px;
+    background: var(--surface);
+    box-shadow: 0 1px 2px rgba(35, 33, 29, 0.05);
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: -0.04em;
+}
+
+.brand__name {
+    overflow: hidden;
+    font-size: 14px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.topbar__actions {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.save-status {
+    min-width: 0;
+    margin: 0 6px 0 0;
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.save-status[data-state="saving"] {
+    color: var(--text-secondary);
+}
+
+.save-status[data-state="saved"] {
+    color: var(--success);
+}
+
+.save-status[data-state="error"] {
+    color: var(--danger);
+}
+
+.icon-button,
+.text-button {
+    display: inline-flex;
+    min-height: 36px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    transition:
+        background-color var(--transition-fast),
+        color var(--transition-fast),
+        transform var(--transition-fast);
+}
+
+.icon-button {
+    width: 36px;
+    padding: 0;
+}
+
+.text-button {
+    padding: 7px 11px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.icon-button:hover,
+.text-button:hover {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+}
+
+.icon-button:active,
+.text-button:active {
+    background: var(--surface-active);
+    transform: translateY(1px);
+}
+
+/* ==========================================================================
+   Area di lavoro
+   ========================================================================== */
+
+.workspace {
+    display: flex;
+    width: 100%;
+    flex: 1 0 auto;
+    justify-content: center;
+}
+
+.document {
+    width: min(100%, var(--document-width));
+    min-height: calc(100vh - 160px);
+    padding:
+        clamp(54px, 9vh, 104px)
+        var(--document-padding-inline)
+        96px;
+}
+
+/* ==========================================================================
+   Intestazione documento
+   ========================================================================== */
+
+.document-header {
+    position: relative;
+    margin-bottom: 28px;
+}
+
+.document-icon-row {
+    min-height: 54px;
+    margin-left: -5px;
+    margin-bottom: 7px;
+}
+
+.document-icon {
+    display: inline-grid;
+    width: 54px;
+    height: 54px;
+    padding: 0;
+    place-items: center;
+    border-radius: 12px;
+    background: transparent;
+    transition:
+        background-color var(--transition-fast),
+        transform var(--transition-fast);
+}
+
+.document-icon:hover {
+    background: var(--surface-hover);
+}
+
+.document-icon:active {
+    transform: scale(0.96);
+}
+
+.document-icon[aria-expanded="true"] {
+    background: var(--surface-active);
+}
+
+.document-icon__emoji {
+    display: block;
+    width: 44px;
+    height: 44px;
+    font-size: 40px;
+    line-height: 44px;
+    text-align: center;
+}
+
+.document-title {
+    display: block;
+    width: 100%;
+    min-height: 58px;
+    max-height: 240px;
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: clamp(36px, 6vw, 48px);
+    font-weight: 760;
+    letter-spacing: -0.045em;
+    line-height: 1.12;
+}
+
+.document-title::placeholder {
+    color: #c1beb7;
+    opacity: 1;
+}
+
+/* ==========================================================================
+   Editor e blocchi
+   ========================================================================== */
+
+.editor {
+    position: relative;
+}
+
+.block-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.block {
+    position: relative;
+    display: grid;
+    grid-template-columns: 0 minmax(0, 1fr);
+    min-height: 32px;
+    align-items: flex-start;
+}
+
+.block:hover,
+.block:focus-within {
+    grid-template-columns: 28px minmax(0, 1fr);
+    margin-left: -28px;
+}
+
+.block__controls {
+    display: flex;
+    width: 28px;
+    min-height: 32px;
+    align-items: center;
+    justify-content: flex-start;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--transition-fast);
+}
+
+.block:hover .block__controls,
+.block:focus-within .block__controls {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.block__handle {
+    display: grid;
+    width: 24px;
+    height: 28px;
+    padding: 0;
+    place-items: center;
+    border-radius: 5px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 17px;
+    line-height: 1;
+    transition:
+        color var(--transition-fast),
+        background-color var(--transition-fast);
+}
+
+.block__handle:hover {
+    background: var(--surface-hover);
+    color: var(--text-secondary);
+}
+
+.block__content {
+    min-width: 0;
+    min-height: 32px;
+    padding: 3px 2px;
+    border-radius: 4px;
+    outline: none;
+    color: var(--text-primary);
+    font-size: 16px;
+    line-height: 1.62;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.block__content:empty::before {
+    color: var(--text-placeholder);
+    content: attr(data-placeholder);
+    pointer-events: none;
+}
+
+.block__content:focus {
+    background: rgba(255, 255, 255, 0.35);
+}
+
+.block[data-selected="true"] .block__content {
+    background: var(--accent-soft);
+}
+
+.block[data-depth="1"] {
+    padding-left: 28px;
+}
+
+.block[data-depth="2"] {
+    padding-left: 56px;
+}
+
+.block[data-depth="3"] {
+    padding-left: 84px;
+}
+
+.block[data-depth="4"] {
+    padding-left: 112px;
+}
+
+.block[data-depth="5"] {
+    padding-left: 140px;
+}
+
+/* ==========================================================================
+   Pulsante aggiunta blocco
+   ========================================================================== */
+
+.add-block-button {
+    display: inline-flex;
+    min-height: 34px;
+    align-items: center;
+    gap: 7px;
+    margin-top: 9px;
+    margin-left: -8px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 13px;
+    opacity: 0;
+    transition:
+        opacity var(--transition-fast),
+        color var(--transition-fast),
+        background-color var(--transition-fast);
+}
+
+.document:hover .add-block-button,
+.add-block-button:focus-visible {
+    opacity: 1;
+}
+
+.add-block-button:hover {
+    background: var(--surface-hover);
+    color: var(--text-secondary);
+}
+
+.add-block-button > span:first-child {
+    font-size: 17px;
+    line-height: 1;
+}
+
+/* ==========================================================================
+   Popover emoji
+   ========================================================================== */
+
+.popover {
+    position: fixed;
+    z-index: 100;
+    width: min(318px, calc(100vw - 24px));
+    overflow: hidden;
+    border: 1px solid var(--border-soft);
+    border-radius: var(--radius-large);
+    background: var(--surface);
+    box-shadow: var(--shadow-popover);
+}
+
+.popover__header {
+    display: flex;
+    min-height: 46px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 8px 10px 8px 14px;
+    border-bottom: 1px solid var(--border-soft);
+}
+
+.popover__header strong {
+    font-size: 13px;
+    font-weight: 650;
+}
+
+.popover__close {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    place-items: center;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 22px;
+    line-height: 1;
+}
+
+.popover__close:hover {
+    background: var(--surface-hover);
+    color: var(--text-primary);
+}
+
+.emoji-popover {
+    top: 140px;
+    left: max(12px, calc(50% - 380px));
+}
+
+.emoji-grid {
+    display: grid;
+    max-height: 310px;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 3px;
+    padding: 10px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
+
+.emoji-button {
+    display: grid;
+    width: 100%;
+    aspect-ratio: 1;
+    min-width: 0;
+    padding: 0;
+    place-items: center;
+    border-radius: 8px;
+    background: transparent;
+    font-size: 25px;
+    line-height: 1;
+    transition:
+        background-color var(--transition-fast),
+        transform var(--transition-fast);
+}
+
+.emoji-button:hover {
+    background: var(--surface-hover);
+    transform: scale(1.06);
+}
+
+.emoji-button:active {
+    background: var(--surface-active);
+    transform: scale(0.96);
+}
+
+/* ==========================================================================
+   Notifiche
+   ========================================================================== */
+
+.toast-region {
+    position: fixed;
+    z-index: 200;
+    right: 18px;
+    bottom: 18px;
+    display: flex;
+    width: min(340px, calc(100vw - 36px));
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.toast {
+    max-width: 100%;
+    padding: 10px 13px;
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    background: rgba(41, 40, 39, 0.94);
+    box-shadow: 0 8px 26px rgba(35, 33, 29, 0.18);
+    color: #ffffff;
+    font-size: 13px;
+    line-height: 1.4;
+    opacity: 0;
+    transform: translateY(8px);
+    transition:
+        opacity var(--transition-medium),
+        transform var(--transition-medium);
+}
+
+.toast--visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.toast--error {
+    background: rgba(157, 46, 46, 0.96);
+}
+
+/* ==========================================================================
+   Piè di pagina
+   ========================================================================== */
+
+.app-footer {
+    flex: 0 0 auto;
+    padding: 22px 20px 28px;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+}
+
+.app-footer p {
+    margin: 0;
+}
+
+/* ==========================================================================
+   Stato di caricamento
+   ========================================================================== */
+
+.app-shell[data-loading="true"] .document {
+    opacity: 0.65;
+    pointer-events: none;
+}
+
+.app-shell[data-loading="true"] .document::after {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--border-medium);
+    border-top-color: var(--text-secondary);
+    border-radius: 50%;
+    content: "";
+    animation: note-u-spin 700ms linear infinite;
+}
+
+@keyframes note-u-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ==========================================================================
+   Schermi piccoli
+   ========================================================================== */
+
+@media (max-width: 700px) {
+    :root {
+        --document-padding-inline: 22px;
+    }
+
+    .topbar__inner {
+        padding-inline: 12px;
+    }
+
+    .brand__name {
+        display: none;
+    }
+
+    .save-status {
+        display: none;
+    }
+
+    .document {
+        padding-top: 48px;
+        padding-bottom: 72px;
+    }
+
+    .document-icon-row {
+        min-height: 48px;
+    }
+
+    .document-icon {
+        width: 50px;
+        height: 50px;
+    }
+
+    .document-icon__emoji {
+        width: 40px;
+        height: 40px;
+        font-size: 37px;
+        line-height: 40px;
+    }
+
+    .document-title {
+        min-height: 48px;
+        font-size: clamp(34px, 11vw, 43px);
+    }
+
+    .block,
+    .block:hover,
+    .block:focus-within {
+        grid-template-columns: minmax(0, 1fr);
+        margin-left: 0;
+    }
+
+    .block__controls {
+        display: none;
+    }
+
+    .block__content {
+        padding-inline: 0;
+    }
+
+    .add-block-button {
+        margin-left: -8px;
+        opacity: 1;
+    }
+
+    .emoji-popover {
+        top: 112px;
+        right: 12px;
+        left: 12px;
+        width: auto;
+    }
+}
+
+@media (max-width: 430px) {
+    :root {
+        --document-padding-inline: 18px;
+    }
+
+    .text-button {
+        padding-inline: 9px;
+    }
+
+    .emoji-grid {
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+    }
+}
+
+/* ==========================================================================
+   Preferenze di sistema
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+@media print {
+    .topbar,
+    .app-footer,
+    .add-block-button,
+    .block__controls,
+    .toast-region,
+    .popover {
+        display: none !important;
+    }
+
+    body {
+        background: #ffffff;
+    }
+
+    .document {
+        width: 100%;
+        max-width: none;
+        padding: 0;
+    }
+
+    .block,
+    .block:hover,
+    .block:focus-within {
+        grid-template-columns: minmax(0, 1fr);
+        margin-left: 0;
+    }
+}
