@@ -1,20 +1,17 @@
 /**
  * Note-U
- * Version: 0.2.0
+ * Version: 0.3.0
  *
  * URL-based document storage.
  *
- * This module is responsible for:
- * - creating valid document models;
- * - normalizing untrusted document data;
- * - preserving nested block structures;
- * - encoding documents into the URL;
- * - decoding documents from the URL;
- * - cloning document models safely;
- * - generating unique block identifiers;
- * - handling invalid or unsupported stored data.
- *
- * No document content is stored in local storage, cookies or a server.
+ * Responsibilities:
+ * - create and normalize documents;
+ * - migrate older documents to version 3;
+ * - normalize recursive blocks;
+ * - normalize inline rich-text content;
+ * - encode and decode documents using Base64URL;
+ * - read and write notes in the current URL;
+ * - preserve compatibility with legacy URL formats.
  */
 
 (function () {
@@ -24,19 +21,13 @@
     // Constants
     // =========================================================================
 
-    const DOCUMENT_VERSION = 1;
+    const DOCUMENT_VERSION = 3;
 
     const DEFAULT_TITLE = "Note";
     const DEFAULT_ICON = "📝";
     const DEFAULT_BLOCK_TYPE = "paragraph";
 
     const URL_PARAMETER_NAME = "note";
-
-    const MAX_TITLE_LENGTH = 180;
-    const MAX_ICON_LENGTH = 16;
-    const MAX_BLOCK_CONTENT_LENGTH = 100000;
-    const MAX_BLOCK_DEPTH = 20;
-    const MAX_BLOCK_COUNT = 5000;
 
     const SUPPORTED_BLOCK_TYPES = Object.freeze([
         "paragraph",
@@ -46,15 +37,33 @@
         "numbered-list",
         "checklist",
         "quote",
-        "divider"
+        "divider",
+        "code",
+        "toggle"
     ]);
 
+    const SUPPORTED_INLINE_MARKS = Object.freeze([
+        "bold",
+        "italic",
+        "strikethrough",
+        "highlight",
+        "code"
+    ]);
+
+    const SUPPORTED_TOGGLE_TITLE_STYLES = Object.freeze([
+        "paragraph",
+        "heading-1",
+        "heading-2"
+    ]);
+
+    const DEFAULT_TOGGLE_TITLE_STYLE = "paragraph";
+
     // =========================================================================
-    // Identifier generation
+    // Identifiers
     // =========================================================================
 
     /**
-     * Creates a unique identifier suitable for document blocks.
+     * Creates a unique identifier.
      *
      * @returns {string}
      */
@@ -66,37 +75,455 @@
             return window.crypto.randomUUID();
         }
 
-        const timestamp =
-            Date.now().toString(36);
-
-        const randomPart =
-            Math.random()
-                .toString(36)
-                .slice(2, 12);
-
-        return `block-${timestamp}-${randomPart}`;
+        return [
+            "block",
+            Date.now().toString(36),
+            Math.random().toString(36).slice(2, 10)
+        ].join("-");
     }
 
     // =========================================================================
-    // Default models
+    // Rich-text content
     // =========================================================================
 
     /**
-     * Creates a new paragraph block.
+     * Creates a plain rich-text segment.
      *
+     * @param {string} [text]
      * @returns {Object}
      */
-    function createDefaultBlock() {
+    function createTextSegment(text = "") {
         return {
-            id: createId(),
-            type: DEFAULT_BLOCK_TYPE,
-            content: "",
-            children: []
+            text: String(text)
         };
     }
 
     /**
-     * Creates a new empty document.
+     * Creates normalized rich-text content.
+     *
+     * @param {*} value
+     * @returns {Array<Object>}
+     */
+    function normalizeRichText(value) {
+        /*
+         * Version 1 and version 2 notes stored block content as a string.
+         */
+        if (typeof value === "string") {
+            return [
+                createTextSegment(value)
+            ];
+        }
+
+        if (!Array.isArray(value)) {
+            return [
+                createTextSegment("")
+            ];
+        }
+
+        const segments = [];
+
+        for (const item of value) {
+            const segment =
+                normalizeTextSegment(item);
+
+            if (!segment) {
+                continue;
+            }
+
+            const previousSegment =
+                segments[segments.length - 1];
+
+            if (
+                previousSegment &&
+                haveEqualMarks(
+                    previousSegment.marks,
+                    segment.marks
+                )
+            ) {
+                previousSegment.text +=
+                    segment.text;
+
+                continue;
+            }
+
+            segments.push(segment);
+        }
+
+        if (segments.length === 0) {
+            return [
+                createTextSegment("")
+            ];
+        }
+
+        return segments;
+    }
+
+    /**
+     * Normalizes one rich-text segment.
+     *
+     * @param {*} value
+     * @returns {Object|null}
+     */
+    function normalizeTextSegment(value) {
+        if (typeof value === "string") {
+            return createTextSegment(value);
+        }
+
+        if (
+            !value ||
+            typeof value !== "object"
+        ) {
+            return null;
+        }
+
+        const segment = {
+            text: String(value.text || "")
+        };
+
+        const marks =
+            normalizeMarks(value.marks);
+
+        if (marks.length > 0) {
+            segment.marks = marks;
+        }
+
+        return segment;
+    }
+
+    /**
+     * Normalizes inline formatting marks.
+     *
+     * @param {*} value
+     * @returns {Array<string>}
+     */
+    function normalizeMarks(value) {
+        if (!Array.isArray(value)) {
+            return [];
+        }
+
+        return [
+            ...new Set(
+                value.filter(mark =>
+                    SUPPORTED_INLINE_MARKS.includes(
+                        mark
+                    )
+                )
+            )
+        ];
+    }
+
+    /**
+     * Checks whether two mark collections are equal.
+     *
+     * @param {*} first
+     * @param {*} second
+     * @returns {boolean}
+     */
+    function haveEqualMarks(first, second) {
+        const firstMarks =
+            normalizeMarks(first);
+
+        const secondMarks =
+            normalizeMarks(second);
+
+        if (
+            firstMarks.length !==
+            secondMarks.length
+        ) {
+            return false;
+        }
+
+        return firstMarks.every(
+            mark =>
+                secondMarks.includes(mark)
+        );
+    }
+
+    /**
+     * Returns the plain text represented by rich-text content.
+     *
+     * @param {*} content
+     * @returns {string}
+     */
+    function richTextToPlainText(content) {
+        return normalizeRichText(content)
+            .map(segment => segment.text)
+            .join("");
+    }
+
+    /**
+     * Returns whether rich-text content is empty.
+     *
+     * @param {*} content
+     * @returns {boolean}
+     */
+    function isRichTextEmpty(content) {
+        return (
+            richTextToPlainText(content)
+                .trim()
+                .length === 0
+        );
+    }
+
+    // =========================================================================
+    // Blocks
+    // =========================================================================
+
+    /**
+     * Creates a default block.
+     *
+     * @param {string} [type]
+     * @param {string|Array<Object>} [content]
+     * @returns {Object}
+     */
+    function createDefaultBlock(
+        type = DEFAULT_BLOCK_TYPE,
+        content = ""
+    ) {
+        const normalizedType =
+            normalizeBlockType(type);
+
+        const block = {
+            id: createId(),
+            type: normalizedType,
+            content:
+                normalizedType === "divider"
+                    ? []
+                    : normalizeRichText(content),
+            children: []
+        };
+
+        applyBlockSpecificDefaults(block);
+
+        return block;
+    }
+
+    /**
+     * Normalizes a block type.
+     *
+     * @param {*} value
+     * @returns {string}
+     */
+    function normalizeBlockType(value) {
+        return SUPPORTED_BLOCK_TYPES.includes(
+            value
+        )
+            ? value
+            : DEFAULT_BLOCK_TYPE;
+    }
+
+    /**
+     * Normalizes one block recursively.
+     *
+     * @param {*} value
+     * @returns {Object}
+     */
+    function normalizeBlock(value) {
+        const source =
+            value &&
+            typeof value === "object"
+                ? value
+                : {};
+
+        const type =
+            normalizeLegacyBlockType(
+                source.type
+            );
+
+        const block = {
+            id:
+                typeof source.id === "string" &&
+                source.id.trim()
+                    ? source.id
+                    : createId(),
+
+            type,
+
+            content:
+                type === "divider"
+                    ? []
+                    : normalizeRichText(
+                        source.content
+                    ),
+
+            children: normalizeBlocks(
+                source.children
+            )
+        };
+
+        if (type === "checklist") {
+            block.checked =
+                Boolean(source.checked);
+        }
+
+        if (type === "toggle") {
+            block.open =
+                source.open !== false;
+
+            block.titleStyle =
+                normalizeToggleTitleStyle(
+                    source.titleStyle ||
+                    source.style
+                );
+        }
+
+        return block;
+    }
+
+    /**
+     * Normalizes older or alternate block type names.
+     *
+     * @param {*} value
+     * @returns {string}
+     */
+    function normalizeLegacyBlockType(value) {
+        const aliases = {
+            text: "paragraph",
+            heading1: "heading-1",
+            heading2: "heading-2",
+            h1: "heading-1",
+            h2: "heading-2",
+            bullet: "bullet-list",
+            bullets: "bullet-list",
+            unordered: "bullet-list",
+            numbered: "numbered-list",
+            ordered: "numbered-list",
+            todo: "checklist",
+            checkbox: "checklist",
+            blockquote: "quote",
+            hr: "divider",
+            separator: "divider",
+            dropdown: "toggle",
+            collapsible: "toggle",
+            "code-block": "code"
+        };
+
+        if (
+            typeof value === "string" &&
+            Object.prototype.hasOwnProperty.call(
+                aliases,
+                value
+            )
+        ) {
+            return aliases[value];
+        }
+
+        return normalizeBlockType(value);
+    }
+
+    /**
+     * Normalizes a block collection.
+     *
+     * @param {*} value
+     * @returns {Array<Object>}
+     */
+    function normalizeBlocks(value) {
+        if (!Array.isArray(value)) {
+            return [];
+        }
+
+        return value.map(normalizeBlock);
+    }
+
+    /**
+     * Applies default fields associated with a block type.
+     *
+     * @param {Object} block
+     */
+    function applyBlockSpecificDefaults(block) {
+        if (block.type === "checklist") {
+            block.checked = false;
+        }
+
+        if (block.type === "toggle") {
+            block.open = true;
+            block.titleStyle =
+                DEFAULT_TOGGLE_TITLE_STYLE;
+        }
+    }
+
+    /**
+     * Normalizes the title style of a toggle.
+     *
+     * @param {*} value
+     * @returns {string}
+     */
+    function normalizeToggleTitleStyle(value) {
+        return SUPPORTED_TOGGLE_TITLE_STYLES.includes(
+            value
+        )
+            ? value
+            : DEFAULT_TOGGLE_TITLE_STYLE;
+    }
+
+    /**
+     * Checks whether a block contains meaningful content.
+     *
+     * @param {*} value
+     * @returns {boolean}
+     */
+    function hasMeaningfulBlockContent(value) {
+        const block =
+            normalizeBlock(value);
+
+        if (block.type === "divider") {
+            return true;
+        }
+
+        if (
+            !isRichTextEmpty(block.content)
+        ) {
+            return true;
+        }
+
+        return block.children.some(
+            hasMeaningfulBlockContent
+        );
+    }
+
+    /**
+     * Counts blocks recursively.
+     *
+     * @param {*} value
+     * @returns {number}
+     */
+    function countBlocks(value) {
+        const blocks =
+            Array.isArray(value)
+                ? value
+                : (
+                    value &&
+                    Array.isArray(value.blocks)
+                        ? value.blocks
+                        : []
+                );
+
+        let count = 0;
+
+        function visit(collection) {
+            for (const block of collection) {
+                count += 1;
+
+                if (
+                    block &&
+                    Array.isArray(block.children)
+                ) {
+                    visit(block.children);
+                }
+            }
+        }
+
+        visit(blocks);
+
+        return count;
+    }
+
+    // =========================================================================
+    // Documents
+    // =========================================================================
+
+    /**
+     * Creates a new document.
      *
      * @returns {Object}
      */
@@ -111,406 +538,224 @@
         };
     }
 
-    // =========================================================================
-    // Document normalization
-    // =========================================================================
-
     /**
-     * Converts unknown input into a valid document model.
+     * Normalizes and migrates a document.
      *
      * @param {*} value
      * @returns {Object}
      */
     function normalizeDocument(value) {
-        if (!isPlainObject(value)) {
-            return createDocument();
-        }
+        const source =
+            value &&
+            typeof value === "object"
+                ? value
+                : {};
 
-        const normalizationState = {
-            blockCount: 0,
-            usedIds: new Set()
-        };
-
-        const blocks =
-            normalizeBlockCollection(
-                value.blocks,
-                0,
-                normalizationState
-            );
-
-        return {
+        const documentModel = {
             version: DOCUMENT_VERSION,
 
-            title: normalizeTitle(value.title),
+            title:
+                typeof source.title === "string"
+                    ? source.title
+                    : DEFAULT_TITLE,
 
-            icon: normalizeIcon(value.icon),
+            icon:
+                typeof source.icon === "string" &&
+                source.icon.trim()
+                    ? source.icon
+                    : DEFAULT_ICON,
 
-            blocks:
-                blocks.length > 0
-                    ? blocks
-                    : [createDefaultBlock()]
+            blocks: normalizeBlocks(
+                source.blocks
+            )
         };
+
+        /*
+         * Support older compact document properties.
+         */
+        if (
+            documentModel.title === DEFAULT_TITLE &&
+            typeof source.t === "string"
+        ) {
+            documentModel.title = source.t;
+        }
+
+        if (
+            documentModel.icon === DEFAULT_ICON &&
+            typeof source.e === "string" &&
+            source.e.trim()
+        ) {
+            documentModel.icon = source.e;
+        }
+
+        /*
+         * An older monolithic version stored the note body as HTML.
+         * We preserve it as plain text instead of injecting arbitrary HTML.
+         */
+        if (
+            documentModel.blocks.length === 0 &&
+            typeof source.b === "string"
+        ) {
+            documentModel.blocks =
+                migrateLegacyHtmlBody(source.b);
+        }
+
+        if (
+            documentModel.blocks.length === 0
+        ) {
+            documentModel.blocks.push(
+                createDefaultBlock()
+            );
+        }
+
+        return documentModel;
     }
 
     /**
-     * Normalizes a collection of blocks.
+     * Converts a legacy HTML body into safe paragraph blocks.
      *
-     * @param {*} value
-     * @param {number} depth
-     * @param {Object} state
-     * @param {number} state.blockCount
-     * @param {Set<string>} state.usedIds
+     * @param {string} html
      * @returns {Array<Object>}
      */
-    function normalizeBlockCollection(
-        value,
-        depth,
-        state
-    ) {
-        if (
-            !Array.isArray(value) ||
-            depth > MAX_BLOCK_DEPTH ||
-            state.blockCount >= MAX_BLOCK_COUNT
-        ) {
-            return [];
-        }
+    function migrateLegacyHtmlBody(html) {
+        const container =
+            document.createElement("div");
 
-        const normalizedBlocks = [];
+        container.innerHTML =
+            String(html || "");
 
-        for (const item of value) {
-            if (state.blockCount >= MAX_BLOCK_COUNT) {
-                break;
-            }
+        const text =
+            container.innerText
+                .replace(/\r\n?/g, "\n");
 
-            const block =
-                normalizeBlock(
-                    item,
-                    depth,
-                    state
-                );
+        const lines =
+            text.split("\n");
 
-            if (block) {
-                normalizedBlocks.push(block);
-            }
-        }
-
-        return normalizedBlocks;
-    }
-
-    /**
-     * Normalizes one block and its descendants.
-     *
-     * @param {*} value
-     * @param {number} depth
-     * @param {Object} state
-     * @returns {Object|null}
-     */
-    function normalizeBlock(
-        value,
-        depth,
-        state
-    ) {
-        if (
-            !isPlainObject(value) ||
-            depth > MAX_BLOCK_DEPTH ||
-            state.blockCount >= MAX_BLOCK_COUNT
-        ) {
-            return null;
-        }
-
-        state.blockCount += 1;
-
-        const type =
-            normalizeBlockType(value.type);
-
-        const block = {
-            id: normalizeBlockId(
-                value.id,
-                state.usedIds
-            ),
-
-            type,
-
-            content:
-                type === "divider"
-                    ? ""
-                    : normalizeBlockContent(
-                        value.content
-                    ),
-
-            children:
-                normalizeBlockCollection(
-                    value.children,
-                    depth + 1,
-                    state
+        const blocks =
+            lines.map(line =>
+                createDefaultBlock(
+                    "paragraph",
+                    line
                 )
-        };
+            );
 
-        if (type === "checklist") {
-            block.checked =
-                Boolean(value.checked);
-        }
-
-        return block;
+        return blocks.length > 0
+            ? blocks
+            : [
+                createDefaultBlock()
+            ];
     }
 
     /**
-     * Normalizes the document title.
+     * Creates a safe document clone.
      *
      * @param {*} value
-     * @returns {string}
-     */
-    function normalizeTitle(value) {
-        if (typeof value !== "string") {
-            return DEFAULT_TITLE;
-        }
-
-        return value.slice(
-            0,
-            MAX_TITLE_LENGTH
-        );
-    }
-
-    /**
-     * Normalizes the document icon.
-     *
-     * @param {*} value
-     * @returns {string}
-     */
-    function normalizeIcon(value) {
-        if (typeof value !== "string") {
-            return DEFAULT_ICON;
-        }
-
-        const trimmedValue = value.trim();
-
-        if (!trimmedValue) {
-            return DEFAULT_ICON;
-        }
-
-        return Array.from(trimmedValue)
-            .slice(0, MAX_ICON_LENGTH)
-            .join("");
-    }
-
-    /**
-     * Normalizes a block identifier.
-     *
-     * Duplicate or invalid identifiers are replaced.
-     *
-     * @param {*} value
-     * @param {Set<string>} usedIds
-     * @returns {string}
-     */
-    function normalizeBlockId(
-        value,
-        usedIds
-    ) {
-        let id =
-            typeof value === "string"
-                ? value.trim()
-                : "";
-
-        if (
-            !id ||
-            id.length > 160 ||
-            usedIds.has(id)
-        ) {
-            do {
-                id = createId();
-            } while (usedIds.has(id));
-        }
-
-        usedIds.add(id);
-
-        return id;
-    }
-
-    /**
-     * Normalizes a block type.
-     *
-     * @param {*} value
-     * @returns {string}
-     */
-    function normalizeBlockType(value) {
-        return SUPPORTED_BLOCK_TYPES.includes(value)
-            ? value
-            : DEFAULT_BLOCK_TYPE;
-    }
-
-    /**
-     * Normalizes block text content.
-     *
-     * @param {*} value
-     * @returns {string}
-     */
-    function normalizeBlockContent(value) {
-        if (typeof value !== "string") {
-            return "";
-        }
-
-        return value
-            .replace(/\r\n?/g, "\n")
-            .slice(0, MAX_BLOCK_CONTENT_LENGTH);
-    }
-
-    // =========================================================================
-    // Cloning
-    // =========================================================================
-
-    /**
-     * Creates a safe deep clone of a document model.
-     *
-     * The returned value is also normalized.
-     *
-     * @param {*} documentModel
      * @returns {Object}
      */
-    function cloneDocument(documentModel) {
+    function cloneDocument(value) {
         return normalizeDocument(
-            deepClone(documentModel)
+            JSON.parse(
+                JSON.stringify(
+                    normalizeDocument(value)
+                )
+            )
         );
     }
 
     /**
-     * Creates a deep clone of JSON-compatible data.
+     * Checks whether a document has meaningful content.
      *
      * @param {*} value
-     * @returns {*}
+     * @returns {boolean}
      */
-    function deepClone(value) {
+    function hasMeaningfulContent(value) {
+        const documentModel =
+            normalizeDocument(value);
+
         if (
-            typeof structuredClone === "function"
+            documentModel.title.trim() &&
+            documentModel.title.trim() !==
+                DEFAULT_TITLE
         ) {
-            try {
-                return structuredClone(value);
-            } catch (error) {
-                console.warn(
-                    "Note-U could not clone data with structuredClone.",
-                    error
-                );
-            }
+            return true;
         }
 
-        try {
-            return JSON.parse(
-                JSON.stringify(value)
-            );
-        } catch (error) {
-            console.warn(
-                "Note-U could not clone the document model.",
-                error
-            );
-
-            return null;
+        if (
+            documentModel.icon !==
+            DEFAULT_ICON
+        ) {
+            return true;
         }
+
+        return documentModel.blocks.some(
+            hasMeaningfulBlockContent
+        );
     }
 
     // =========================================================================
-    // URL encoding
+    // UTF-8 and Base64URL
     // =========================================================================
 
     /**
-     * Encodes a document into a compact URL-safe string.
+     * Encodes UTF-8 text as Base64.
      *
-     * @param {*} documentModel
+     * @param {string} value
      * @returns {string}
      */
-    function encodeDocument(documentModel) {
-        const normalizedDocument =
-            normalizeDocument(documentModel);
-
-        const json =
-            JSON.stringify(normalizedDocument);
-
+    function encodeBase64(value) {
         const bytes =
-            new TextEncoder().encode(json);
+            new TextEncoder().encode(value);
 
-        return bytesToBase64Url(bytes);
-    }
-
-    /**
-     * Decodes a URL-safe document string.
-     *
-     * @param {*} encodedValue
-     * @returns {Object|null}
-     */
-    function decodeDocument(encodedValue) {
-        if (
-            typeof encodedValue !== "string" ||
-            encodedValue.length === 0
-        ) {
-            return null;
-        }
-
-        try {
-            const bytes =
-                base64UrlToBytes(encodedValue);
-
-            const json =
-                new TextDecoder(
-                    "utf-8",
-                    {
-                        fatal: true
-                    }
-                ).decode(bytes);
-
-            const parsedValue =
-                JSON.parse(json);
-
-            return normalizeDocument(parsedValue);
-        } catch (error) {
-            console.warn(
-                "Note-U could not decode the document from the URL.",
-                error
-            );
-
-            return null;
-        }
-    }
-
-    /**
-     * Converts bytes into URL-safe Base64.
-     *
-     * @param {Uint8Array} bytes
-     * @returns {string}
-     */
-    function bytesToBase64Url(bytes) {
         let binary = "";
 
-        const chunkSize = 0x8000;
-
-        for (
-            let offset = 0;
-            offset < bytes.length;
-            offset += chunkSize
-        ) {
-            const chunk =
-                bytes.subarray(
-                    offset,
-                    offset + chunkSize
-                );
-
-            binary += String.fromCharCode(
-                ...chunk
-            );
+        for (const byte of bytes) {
+            binary += String.fromCharCode(byte);
         }
 
-        return window
-            .btoa(binary)
+        return window.btoa(binary);
+    }
+
+    /**
+     * Decodes Base64 into UTF-8 text.
+     *
+     * @param {string} value
+     * @returns {string}
+     */
+    function decodeBase64(value) {
+        const binary =
+            window.atob(value);
+
+        const bytes =
+            Uint8Array.from(
+                binary,
+                character =>
+                    character.charCodeAt(0)
+            );
+
+        return new TextDecoder().decode(bytes);
+    }
+
+    /**
+     * Converts Base64 into URL-safe Base64.
+     *
+     * @param {string} value
+     * @returns {string}
+     */
+    function toBase64Url(value) {
+        return value
             .replace(/\+/g, "-")
             .replace(/\//g, "_")
             .replace(/=+$/g, "");
     }
 
     /**
-     * Converts URL-safe Base64 into bytes.
+     * Converts URL-safe Base64 into standard Base64.
      *
      * @param {string} value
-     * @returns {Uint8Array}
+     * @returns {string}
      */
-    function base64UrlToBytes(value) {
-        const normalizedValue =
+    function fromBase64Url(value) {
+        const normalized =
             value
                 .replace(/-/g, "+")
                 .replace(/_/g, "/");
@@ -518,75 +763,80 @@
         const paddingLength =
             (
                 4 -
-                (
-                    normalizedValue.length %
-                    4
-                )
+                normalized.length % 4
             ) % 4;
 
-        const paddedValue =
-            normalizedValue +
-            "=".repeat(paddingLength);
-
-        const binary =
-            window.atob(paddedValue);
-
-        const bytes =
-            new Uint8Array(binary.length);
-
-        for (
-            let index = 0;
-            index < binary.length;
-            index += 1
-        ) {
-            bytes[index] =
-                binary.charCodeAt(index);
-        }
-
-        return bytes;
+        return (
+            normalized +
+            "=".repeat(paddingLength)
+        );
     }
 
     // =========================================================================
-    // URL operations
+    // Encoding and decoding
     // =========================================================================
 
     /**
-     * Loads a document from a URL.
+     * Encodes a document into a URL-safe payload.
      *
-     * A new empty document is returned when no stored document exists.
-     *
-     * @param {string|URL} [urlValue]
-     * @returns {Object}
+     * @param {*} value
+     * @returns {string}
      */
-    function loadDocumentFromUrl(
-        urlValue = window.location.href
-    ) {
-        const url =
-            createUrl(urlValue);
+    function encodeDocument(value) {
+        const documentModel =
+            normalizeDocument(value);
 
-        const encodedDocument =
-            getEncodedDocumentFromUrl(url);
+        const json =
+            JSON.stringify(documentModel);
 
-        if (!encodedDocument) {
-            return createDocument();
-        }
-
-        return (
-            decodeDocument(encodedDocument) ||
-            createDocument()
+        return toBase64Url(
+            encodeBase64(json)
         );
     }
 
     /**
-     * Returns the encoded document payload from a URL.
+     * Decodes a URL-safe document payload.
      *
-     * Query-string storage is checked first.
-     * Hash-based legacy storage is supported as a fallback.
-     *
-     * @param {URL} url
-     * @returns {string}
+     * @param {string} encodedValue
+     * @returns {Object}
      */
-    function getEncodedDocumentFromUrl(url) {
+    function decodeDocument(encodedValue) {
+        if (
+            typeof encodedValue !== "string" ||
+            !encodedValue.trim()
+        ) {
+            throw new Error(
+                "The note payload is empty."
+            );
+        }
+
+        const base64 =
+            fromBase64Url(
+                encodedValue.trim()
+            );
+
+        const json =
+            decodeBase64(base64);
+
+        const parsed =
+            JSON.parse(json);
+
+        return normalizeDocument(parsed);
+    }
+
+    // =========================================================================
+    // URL handling
+    // =========================================================================
+
+    /**
+     * Reads an encoded note from the current URL.
+     *
+     * @returns {string|null}
+     */
+    function getEncodedDocumentFromUrl() {
+        const url =
+            new URL(window.location.href);
+
         const queryValue =
             url.searchParams.get(
                 URL_PARAMETER_NAME
@@ -596,57 +846,110 @@
             return queryValue;
         }
 
+        /*
+         * Compatibility with older hash-based links.
+         */
         const hashValue =
-            url.hash.startsWith("#")
-                ? url.hash.slice(1)
-                : url.hash;
+            url.hash.replace(/^#/, "");
 
-        if (!hashValue) {
-            return "";
-        }
-
-        if (
-            hashValue.startsWith(
-                `${URL_PARAMETER_NAME}=`
-            )
-        ) {
-            const hashParameters =
-                new URLSearchParams(hashValue);
-
-            return (
-                hashParameters.get(
-                    URL_PARAMETER_NAME
-                ) || ""
-            );
-        }
-
-        return hashValue;
+        return hashValue || null;
     }
 
     /**
-     * Builds a URL containing a document.
+     * Loads a document from the current URL.
      *
-     * @param {*} documentModel
-     * @param {Object} [options]
-     * @param {string|URL} [options.baseUrl]
+     * @returns {Object}
+     */
+    function loadDocumentFromUrl() {
+        const encodedValue =
+            getEncodedDocumentFromUrl();
+
+        if (!encodedValue) {
+            return createDocument();
+        }
+
+        try {
+            return decodeDocument(
+                encodedValue
+            );
+        } catch (modernError) {
+            try {
+                return decodeLegacyHash(
+                    encodedValue
+                );
+            } catch (legacyError) {
+                throw new Error(
+                    "The note link is invalid or damaged."
+                );
+            }
+        }
+    }
+
+    /**
+     * Attempts to decode an older Base64 or URI-encoded hash.
+     *
+     * @param {string} value
+     * @returns {Object}
+     */
+    function decodeLegacyHash(value) {
+        let decodedValue;
+
+        try {
+            decodedValue =
+                decodeURIComponent(value);
+        } catch (error) {
+            decodedValue = value;
+        }
+
+        try {
+            const json =
+                decodeURIComponent(
+                    escape(
+                        window.atob(
+                            decodedValue
+                        )
+                    )
+                );
+
+            return normalizeDocument(
+                JSON.parse(json)
+            );
+        } catch (error) {
+            const plainText =
+                decodeURIComponent(
+                    decodedValue
+                );
+
+            return normalizeDocument({
+                title: DEFAULT_TITLE,
+                icon: DEFAULT_ICON,
+                blocks: [
+                    createDefaultBlock(
+                        "paragraph",
+                        plainText
+                    )
+                ]
+            });
+        }
+    }
+
+    /**
+     * Creates a URL containing a document.
+     *
+     * @param {*} value
+     * @param {string} [baseUrl]
      * @returns {string}
      */
     function createDocumentUrl(
-        documentModel,
-        options = {}
+        value,
+        baseUrl = window.location.href
     ) {
         const url =
-            createUrl(
-                options.baseUrl ||
-                window.location.href
-            );
-
-        const encodedDocument =
-            encodeDocument(documentModel);
+            new URL(baseUrl);
 
         url.searchParams.set(
             URL_PARAMETER_NAME,
-            encodedDocument
+            encodeDocument(value)
         );
 
         url.hash = "";
@@ -655,56 +958,54 @@
     }
 
     /**
-     * Writes a document into the current browser URL.
+     * Writes a document into the browser URL.
      *
-     * This does not reload the page.
-     *
-     * @param {*} documentModel
+     * @param {*} value
      * @param {Object} [options]
-     * @param {boolean} [options.replace]
+     * @param {boolean} [options.pushHistory]
      * @returns {string}
      */
     function writeDocumentToUrl(
-        documentModel,
+        value,
         options = {}
     ) {
-        const url =
+        const documentModel =
+            normalizeDocument(value);
+
+        const nextUrl =
             createDocumentUrl(
-                documentModel,
-                {
-                    baseUrl:
-                        window.location.href
-                }
+                documentModel
             );
 
         const historyMethod =
-            options.replace === false
+            options.pushHistory
                 ? "pushState"
                 : "replaceState";
 
         window.history[historyMethod](
             {
-                noteU: true
+                noteVersion:
+                    DOCUMENT_VERSION
             },
             "",
-            url
+            nextUrl
         );
 
-        return url;
+        return nextUrl;
     }
 
     /**
-     * Removes stored document data from the current URL.
+     * Removes note data from the current URL.
      *
      * @param {Object} [options]
-     * @param {boolean} [options.replace]
+     * @param {boolean} [options.pushHistory]
      * @returns {string}
      */
     function clearDocumentFromUrl(
         options = {}
     ) {
         const url =
-            createUrl(window.location.href);
+            new URL(window.location.href);
 
         url.searchParams.delete(
             URL_PARAMETER_NAME
@@ -713,14 +1014,12 @@
         url.hash = "";
 
         const historyMethod =
-            options.replace === false
+            options.pushHistory
                 ? "pushState"
                 : "replaceState";
 
         window.history[historyMethod](
-            {
-                noteU: true
-            },
+            null,
             "",
             url.toString()
         );
@@ -729,151 +1028,13 @@
     }
 
     /**
-     * Checks whether a URL contains document data.
+     * Checks whether the current URL contains note data.
      *
-     * @param {string|URL} [urlValue]
      * @returns {boolean}
      */
-    function hasDocumentInUrl(
-        urlValue = window.location.href
-    ) {
-        const url =
-            createUrl(urlValue);
-
+    function hasDocumentInUrl() {
         return Boolean(
-            getEncodedDocumentFromUrl(url)
-        );
-    }
-
-    /**
-     * Creates a URL instance safely.
-     *
-     * @param {string|URL} value
-     * @returns {URL}
-     */
-    function createUrl(value) {
-        if (value instanceof URL) {
-            return new URL(value.toString());
-        }
-
-        return new URL(
-            String(value),
-            window.location.href
-        );
-    }
-
-    // =========================================================================
-    // Document inspection
-    // =========================================================================
-
-    /**
-     * Returns the total number of blocks in a document.
-     *
-     * Nested blocks are included.
-     *
-     * @param {*} documentModel
-     * @returns {number}
-     */
-    function countBlocks(documentModel) {
-        const normalizedDocument =
-            normalizeDocument(documentModel);
-
-        let count = 0;
-
-        function visit(blocks) {
-            for (const block of blocks) {
-                count += 1;
-                visit(block.children);
-            }
-        }
-
-        visit(normalizedDocument.blocks);
-
-        return count;
-    }
-
-    /**
-     * Checks whether a document contains meaningful user content.
-     *
-     * @param {*} documentModel
-     * @returns {boolean}
-     */
-    function hasMeaningfulContent(documentModel) {
-        const documentValue =
-            normalizeDocument(documentModel);
-
-        if (
-            documentValue.title.trim() !==
-            DEFAULT_TITLE
-        ) {
-            return true;
-        }
-
-        if (
-            documentValue.icon !==
-            DEFAULT_ICON
-        ) {
-            return true;
-        }
-
-        return documentValue.blocks.some(
-            hasMeaningfulBlockContent
-        );
-    }
-
-    /**
-     * Checks one block and its descendants for meaningful content.
-     *
-     * @param {Object} block
-     * @returns {boolean}
-     */
-    function hasMeaningfulBlockContent(block) {
-        if (block.type === "divider") {
-            return true;
-        }
-
-        if (
-            block.content.trim().length > 0
-        ) {
-            return true;
-        }
-
-        if (
-            block.type === "checklist" &&
-            block.checked
-        ) {
-            return true;
-        }
-
-        return block.children.some(
-            hasMeaningfulBlockContent
-        );
-    }
-
-    // =========================================================================
-    // Validation helpers
-    // =========================================================================
-
-    /**
-     * Checks whether a value is a plain object.
-     *
-     * @param {*} value
-     * @returns {boolean}
-     */
-    function isPlainObject(value) {
-        if (
-            value === null ||
-            typeof value !== "object"
-        ) {
-            return false;
-        }
-
-        const prototype =
-            Object.getPrototypeOf(value);
-
-        return (
-            prototype === Object.prototype ||
-            prototype === null
+            getEncodedDocumentFromUrl()
         );
     }
 
@@ -886,13 +1047,26 @@
         DEFAULT_TITLE,
         DEFAULT_ICON,
         DEFAULT_BLOCK_TYPE,
+        DEFAULT_TOGGLE_TITLE_STYLE,
         URL_PARAMETER_NAME,
+
         SUPPORTED_BLOCK_TYPES,
+        SUPPORTED_INLINE_MARKS,
+        SUPPORTED_TOGGLE_TITLE_STYLES,
 
         createId,
-        createDocument,
-        createDefaultBlock,
 
+        createTextSegment,
+        normalizeRichText,
+        normalizeMarks,
+        richTextToPlainText,
+        isRichTextEmpty,
+
+        createDefaultBlock,
+        normalizeBlock,
+        normalizeBlocks,
+
+        createDocument,
         normalizeDocument,
         cloneDocument,
 
