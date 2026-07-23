@@ -1,1 +1,231 @@
+<!doctype html>
+<html lang="it">
+<head>
+    <meta charset="utf-8">
 
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover"
+    >
+
+    <meta
+        name="description"
+        content="Note-U è un editor di note portatile e senza backend. L'intero documento vive nel suo URL."
+    >
+
+    <meta name="theme-color" content="#fbfaf8">
+
+    <title>Note-U</title>
+
+    <link
+        id="app-favicon"
+        rel="icon"
+        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📝</text></svg>"
+    >
+
+    <link rel="stylesheet" href="./style.css">
+
+    <script src="./storage.js" defer></script>
+    <script src="./editor.js" defer></script>
+    <script src="./ui.js" defer></script>
+    <script src="./app.js" defer></script>
+</head>
+
+<body>
+    <noscript>
+        <div class="noscript-message">
+            Note-U richiede JavaScript per funzionare.
+        </div>
+    </noscript>
+
+    <div id="app" class="app-shell">
+        <header class="topbar">
+            <div class="topbar__inner">
+                <a
+                    class="brand"
+                    href="./"
+                    aria-label="Apri una nuova nota Note-U"
+                >
+                    <span class="brand__mark" aria-hidden="true">N</span>
+                    <span class="brand__name">Note-U</span>
+                </a>
+
+                <div class="topbar__actions">
+                    <p
+                        id="save-status"
+                        class="save-status"
+                        role="status"
+                        aria-live="polite"
+                    >
+                        Pronto
+                    </p>
+
+                    <button
+                        id="copy-link-button"
+                        class="icon-button"
+                        type="button"
+                        aria-label="Copia il link della nota"
+                        title="Copia il link"
+                    >
+                        <svg
+                            aria-hidden="true"
+                            viewBox="0 0 24 24"
+                            width="20"
+                            height="20"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.8"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                        >
+                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                        </svg>
+                    </button>
+
+                    <button
+                        id="new-note-button"
+                        class="text-button"
+                        type="button"
+                    >
+                        Nuova nota
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <main class="workspace">
+            <article
+                id="document"
+                class="document"
+                aria-label="Documento Note-U"
+            >
+                <header class="document-header">
+                    <div class="document-icon-row">
+                        <button
+                            id="document-icon-button"
+                            class="document-icon"
+                            type="button"
+                            aria-label="Cambia icona del documento"
+                            aria-haspopup="dialog"
+                            aria-expanded="false"
+                        >
+                            <span
+                                id="document-icon"
+                                class="document-icon__emoji"
+                                aria-hidden="true"
+                            >
+                                📝
+                            </span>
+                        </button>
+                    </div>
+
+                    <label class="visually-hidden" for="document-title">
+                        Titolo della nota
+                    </label>
+
+                    <textarea
+                        id="document-title"
+                        class="document-title"
+                        rows="1"
+                        maxlength="180"
+                        placeholder="Senza titolo"
+                        spellcheck="true"
+                        aria-label="Titolo della nota"
+                    ></textarea>
+                </header>
+
+                <section
+                    id="editor"
+                    class="editor"
+                    aria-label="Contenuto della nota"
+                >
+                    <div
+                        id="block-list"
+                        class="block-list"
+                        role="list"
+                    ></div>
+                </section>
+
+                <button
+                    id="add-block-button"
+                    class="add-block-button"
+                    type="button"
+                >
+                    <span aria-hidden="true">＋</span>
+                    <span>Aggiungi un blocco</span>
+                </button>
+            </article>
+        </main>
+
+        <footer class="app-footer">
+            <p>
+                Tutto il documento vive nel link.
+            </p>
+        </footer>
+    </div>
+
+    <div
+        id="emoji-popover"
+        class="popover emoji-popover"
+        role="dialog"
+        aria-modal="false"
+        aria-label="Scegli un'icona"
+        hidden
+    >
+        <div class="popover__header">
+            <strong>Icona</strong>
+
+            <button
+                id="close-emoji-popover-button"
+                class="popover__close"
+                type="button"
+                aria-label="Chiudi"
+            >
+                ×
+            </button>
+        </div>
+
+        <div
+            id="emoji-grid"
+            class="emoji-grid"
+            role="list"
+        ></div>
+    </div>
+
+    <div
+        id="toast-region"
+        class="toast-region"
+        aria-live="polite"
+        aria-atomic="true"
+    ></div>
+
+    <template id="paragraph-block-template">
+        <div
+            class="block block--paragraph"
+            data-block-type="paragraph"
+            role="listitem"
+        >
+            <div class="block__controls">
+                <button
+                    class="block__handle"
+                    type="button"
+                    aria-label="Opzioni del blocco"
+                    tabindex="-1"
+                >
+                    <span aria-hidden="true">⠿</span>
+                </button>
+            </div>
+
+            <div
+                class="block__content"
+                contenteditable="true"
+                role="textbox"
+                aria-multiline="true"
+                data-placeholder="Scrivi qualcosa oppure premi / per i comandi"
+                spellcheck="true"
+            ></div>
+        </div>
+    </template>
+</body>
+</html>
