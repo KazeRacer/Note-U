@@ -1,95 +1,130 @@
-<!doctype html>
-<html lang="it">
+<!DOCTYPE html>
+<html lang="en">
 <head>
-    <meta charset="utf-8">
+    <meta charset="UTF-8">
 
     <meta
         name="viewport"
-        content="width=device-width, initial-scale=1, viewport-fit=cover"
+        content="width=device-width, initial-scale=1"
     >
 
     <meta
         name="description"
-        content="Note-U è un editor di note portatile e senza backend. L'intero documento vive nel suo URL."
+        content="Note-U is a lightweight note editor stored entirely inside the URL."
     >
 
-    <meta name="theme-color" content="#fbfaf8">
+    <meta
+        name="theme-color"
+        content="#f7f7f5"
+    >
 
-    <title>Note-U</title>
+    <title>📝 Note · Note-U</title>
 
     <link
         id="app-favicon"
         rel="icon"
-        href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📝</text></svg>"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📝%3C/text%3E%3C/svg%3E"
     >
 
-    <link rel="stylesheet" href="./style.css">
+    <link
+        rel="stylesheet"
+        href="style.css"
+    >
 
-    <script src="./storage.js" defer></script>
-    <script src="./editor.js" defer></script>
-    <script src="./ui.js" defer></script>
-    <script src="./app.js" defer></script>
+    <script
+        src="storage.js"
+        defer
+    ></script>
+
+    <script
+        src="editor.js"
+        defer
+    ></script>
+
+    <script
+        src="ui.js"
+        defer
+    ></script>
+
+    <script
+        src="app.js"
+        defer
+    ></script>
 </head>
 
 <body>
-    <noscript>
-        <div class="noscript-message">
-            Note-U richiede JavaScript per funzionare.
-        </div>
-    </noscript>
-
-    <div id="app" class="app-shell" data-loading="true">
-        <header id="topbar" class="topbar">
+    <div
+        id="app"
+        class="app"
+        data-loading="true"
+    >
+        <header
+            id="topbar"
+            class="topbar"
+        >
             <div class="topbar__inner">
                 <a
                     class="brand"
                     href="./"
-                    aria-label="Apri una nuova nota Note-U"
+                    aria-label="Open Note-U"
                 >
-                    <span class="brand__mark" aria-hidden="true">N</span>
-                    <span class="brand__name">Note-U</span>
+                    <span
+                        class="brand__mark"
+                        aria-hidden="true"
+                    >
+                        N
+                    </span>
+
+                    <span class="brand__name">
+                        Note-U
+                    </span>
                 </a>
 
-                <div class="topbar__actions">
-                    <p
+                <div class="topbar__status">
+                    <span
                         id="save-status"
                         class="save-status"
+                        data-state="idle"
                         role="status"
                         aria-live="polite"
-                        data-state="idle"
                     >
-                        Pronto
-                    </p>
+                        Ready
+                    </span>
+                </div>
 
+                <div class="topbar__actions">
                     <button
                         id="copy-link-button"
-                        class="icon-button"
+                        class="button button--secondary"
                         type="button"
-                        aria-label="Copia il link della nota"
-                        title="Copia il link"
                     >
-                        <svg
+                        <span
+                            class="button__icon"
                             aria-hidden="true"
-                            viewBox="0 0 24 24"
-                            width="20"
-                            height="20"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="1.8"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
                         >
-                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                        </svg>
+                            🔗
+                        </span>
+
+                        <span class="button__label">
+                            Copy link
+                        </span>
                     </button>
 
                     <button
                         id="new-note-button"
-                        class="text-button"
+                        class="button button--primary"
                         type="button"
                     >
-                        Nuova nota
+                        <span
+                            class="button__icon"
+                            aria-hidden="true"
+                        >
+                            ＋
+                        </span>
+
+                        <span class="button__label">
+                            New note
+                        </span>
                     </button>
                 </div>
             </div>
@@ -99,22 +134,22 @@
             <article
                 id="document"
                 class="document"
-                aria-label="Documento Note-U"
+                aria-label="Note-U document"
             >
                 <header class="document-header">
-                    <div class="document-icon-row">
+                    <div class="document-icon-wrapper">
                         <button
                             id="document-icon-button"
-                            class="document-icon"
+                            class="document-icon-button"
                             type="button"
-                            aria-label="Cambia icona del documento"
+                            aria-label="Change note icon"
                             aria-haspopup="dialog"
-                            aria-controls="emoji-popover"
                             aria-expanded="false"
+                            aria-controls="emoji-popover"
                         >
                             <span
                                 id="document-icon"
-                                class="document-icon__emoji"
+                                class="document-icon"
                                 aria-hidden="true"
                             >
                                 📝
@@ -122,110 +157,496 @@
                         </button>
                     </div>
 
-                    <label class="visually-hidden" for="document-title">
-                        Titolo della nota
-                    </label>
-
                     <textarea
                         id="document-title"
                         class="document-title"
                         rows="1"
                         maxlength="180"
-                        placeholder="Senza titolo"
+                        placeholder="Untitled note"
+                        aria-label="Note title"
                         spellcheck="true"
-                        aria-label="Titolo della nota"
-                    ></textarea>
+                    >Note</textarea>
                 </header>
 
                 <section
                     id="editor"
                     class="editor"
-                    aria-label="Contenuto della nota"
+                    aria-label="Note content"
                 >
                     <div
                         id="block-list"
                         class="block-list"
-                        role="list"
                     ></div>
-                </section>
 
-                <button
-                    id="add-block-button"
-                    class="add-block-button"
-                    type="button"
-                >
-                    <span aria-hidden="true">＋</span>
-                    <span>Aggiungi un blocco</span>
-                </button>
+                    <button
+                        id="add-block-button"
+                        class="add-block-button"
+                        type="button"
+                    >
+                        <span
+                            class="add-block-button__icon"
+                            aria-hidden="true"
+                        >
+                            ＋
+                        </span>
+
+                        <span class="add-block-button__label">
+                            Add a block
+                        </span>
+                    </button>
+                </section>
             </article>
         </main>
 
-        <footer class="app-footer">
-            <p>Tutto il documento vive nel link.</p>
+        <footer class="footer">
+            <p class="footer__text">
+                This note is stored directly inside its link.
+            </p>
         </footer>
-    </div>
-
-    <div
-        id="emoji-popover"
-        class="popover emoji-popover"
-        role="dialog"
-        aria-modal="false"
-        aria-label="Scegli un'icona"
-        hidden
-    >
-        <div class="popover__header">
-            <strong>Icona</strong>
-
-            <button
-                id="close-emoji-popover-button"
-                class="popover__close"
-                type="button"
-                aria-label="Chiudi"
-            >
-                ×
-            </button>
-        </div>
 
         <div
-            id="emoji-grid"
-            class="emoji-grid"
-            role="list"
-        ></div>
-    </div>
-
-    <div
-        id="toast-region"
-        class="toast-region"
-        aria-live="polite"
-        aria-atomic="true"
-    ></div>
-
-    <template id="paragraph-block-template">
-        <div
-            class="block block--paragraph"
-            data-block-type="paragraph"
-            role="listitem"
+            id="emoji-popover"
+            class="popover emoji-popover"
+            role="dialog"
+            aria-label="Select an icon"
+            hidden
         >
-            <div class="block__controls">
+            <div class="popover__header">
+                <strong class="popover__title">
+                    Note icon
+                </strong>
+
                 <button
-                    class="block__handle"
+                    id="close-emoji-popover-button"
+                    class="icon-button"
                     type="button"
-                    aria-label="Opzioni del blocco"
-                    tabindex="-1"
+                    aria-label="Close icon picker"
                 >
-                    <span aria-hidden="true">⠿</span>
+                    ×
                 </button>
             </div>
 
             <div
-                class="block__content"
-                contenteditable="true"
-                role="textbox"
-                aria-multiline="true"
-                data-placeholder="Scrivi qualcosa oppure premi / per i comandi"
-                spellcheck="true"
+                id="emoji-grid"
+                class="emoji-grid"
+                role="list"
             ></div>
         </div>
-    </template>
+
+        <div
+            id="block-menu"
+            class="popover block-menu"
+            role="menu"
+            aria-label="Block actions"
+            hidden
+        >
+            <button
+                class="block-menu__item"
+                type="button"
+                role="menuitem"
+                data-block-action="turn-into"
+            >
+                <span
+                    class="block-menu__item-icon"
+                    aria-hidden="true"
+                >
+                    ↔
+                </span>
+
+                <span class="block-menu__item-label">
+                    Turn into
+                </span>
+
+                <span
+                    class="block-menu__item-shortcut"
+                    aria-hidden="true"
+                >
+                    ›
+                </span>
+            </button>
+
+            <button
+                class="block-menu__item"
+                type="button"
+                role="menuitem"
+                data-block-action="duplicate"
+            >
+                <span
+                    class="block-menu__item-icon"
+                    aria-hidden="true"
+                >
+                    ⧉
+                </span>
+
+                <span class="block-menu__item-label">
+                    Duplicate
+                </span>
+            </button>
+
+            <button
+                class="block-menu__item"
+                type="button"
+                role="menuitem"
+                data-block-action="move-up"
+            >
+                <span
+                    class="block-menu__item-icon"
+                    aria-hidden="true"
+                >
+                    ↑
+                </span>
+
+                <span class="block-menu__item-label">
+                    Move up
+                </span>
+            </button>
+
+            <button
+                class="block-menu__item"
+                type="button"
+                role="menuitem"
+                data-block-action="move-down"
+            >
+                <span
+                    class="block-menu__item-icon"
+                    aria-hidden="true"
+                >
+                    ↓
+                </span>
+
+                <span class="block-menu__item-label">
+                    Move down
+                </span>
+            </button>
+
+            <div
+                class="block-menu__separator"
+                role="separator"
+            ></div>
+
+            <button
+                class="block-menu__item block-menu__item--danger"
+                type="button"
+                role="menuitem"
+                data-block-action="delete"
+            >
+                <span
+                    class="block-menu__item-icon"
+                    aria-hidden="true"
+                >
+                    🗑
+                </span>
+
+                <span class="block-menu__item-label">
+                    Delete
+                </span>
+            </button>
+        </div>
+
+        <div
+            id="block-type-menu"
+            class="popover block-type-menu"
+            role="menu"
+            aria-label="Select block type"
+            hidden
+        >
+            <div class="block-type-menu__header">
+                <span class="block-type-menu__title">
+                    Block type
+                </span>
+            </div>
+
+            <div
+                id="block-type-menu-list"
+                class="block-type-menu__list"
+            >
+                <button
+                    class="block-type-menu__item"
+                    type="button"
+                    role="menuitem"
+                    data-block-type="paragraph"
+                >
+                    <span
+                        class="block-type-menu__icon"
+                        aria-hidden="true"
+                    >
+                        T
+                    </span>
+
+                    <span class="block-type-menu__content">
+                        <strong class="block-type-menu__name">
+                            Text
+                        </strong>
+
+                        <span class="block-type-menu__description">
+                            Plain text block
+                        </span>
+                    </span>
+                </button>
+
+                <button
+                    class="block-type-menu__item"
+                    type="button"
+                    role="menuitem"
+                    data-block-type="heading-1"
+                >
+                    <span
+                        class="block-type-menu__icon"
+                        aria-hidden="true"
+                    >
+                        H1
+                    </span>
+
+                    <span class="block-type-menu__content">
+                        <strong class="block-type-menu__name">
+                            Heading 1
+                        </strong>
+
+                        <span class="block-type-menu__description">
+                            Large section heading
+                        </span>
+                    </span>
+                </button>
+
+                <button
+                    class="block-type-menu__item"
+                    type="button"
+                    role="menuitem"
+                    data-block-type="heading-2"
+                >
+                    <span
+                        class="block-type-menu__icon"
+                        aria-hidden="true"
+                    >
+                        H2
+                    </span>
+
+                    <span class="block-type-menu__content">
+                        <strong class="block-type-menu__name">
+                            Heading 2
+                        </strong>
+
+                        <span class="block-type-menu__description">
+                            Medium section heading
+                        </span>
+                    </span>
+                </button>
+
+                <button
+                    class="block-type-menu__item"
+                    type="button"
+                    role="menuitem"
+                    data-block-type="bullet-list"
+                >
+                    <span
+                        class="block-type-menu__icon"
+                        aria-hidden="true"
+                    >
+                        •
+                    </span>
+
+                    <span class="block-type-menu__content">
+                        <strong class="block-type-menu__name">
+                            Bulleted list
+                        </strong>
+
+                        <span class="block-type-menu__description">
+                            List with bullet points
+                        </span>
+                    </span>
+                </button>
+
+                <button
+                    class="block-type-menu__item"
+                    type="button"
+                    role="menuitem"
+                    data-block-type="numbered-list"
+                >
+                    <span
+                        class="block-type-menu__icon"
+                        aria-hidden="true"
+                    >
+                        1.
+                    </span>
+
+                    <span class="block-type-menu__content">
+                        <strong class="block-type-menu__name">
+                            Numbered list
+                        </strong>
+
+                        <span class="block-type-menu__description">
+                            Ordered list of items
+                        </span>
+                    </span>
+                </button>
+
+                <button
+                    class="block-type-menu__item"
+                    type="button"
+                    role="menuitem"
+                    data-block-type="checklist"
+                >
+                    <span
+                        class="block-type-menu__icon"
+                        aria-hidden="true"
+                    >
+                        ☑
+                    </span>
+
+                    <span class="block-type-menu__content">
+                        <strong class="block-type-menu__name">
+                            Checklist
+                        </strong>
+
+                        <span class="block-type-menu__description">
+                            Track completed tasks
+                        </span>
+                    </span>
+                </button>
+
+                <button
+                    class="block-type-menu__item"
+                    type="button"
+                    role="menuitem"
+                    data-block-type="quote"
+                >
+                    <span
+                        class="block-type-menu__icon"
+                        aria-hidden="true"
+                    >
+                        “
+                    </span>
+
+                    <span class="block-type-menu__content">
+                        <strong class="block-type-menu__name">
+                            Quote
+                        </strong>
+
+                        <span class="block-type-menu__description">
+                            Highlighted quotation
+                        </span>
+                    </span>
+                </button>
+
+                <button
+                    class="block-type-menu__item"
+                    type="button"
+                    role="menuitem"
+                    data-block-type="divider"
+                >
+                    <span
+                        class="block-type-menu__icon"
+                        aria-hidden="true"
+                    >
+                        —
+                    </span>
+
+                    <span class="block-type-menu__content">
+                        <strong class="block-type-menu__name">
+                            Divider
+                        </strong>
+
+                        <span class="block-type-menu__description">
+                            Horizontal separator
+                        </span>
+                    </span>
+                </button>
+            </div>
+        </div>
+
+        <div
+            id="slash-menu"
+            class="popover slash-menu"
+            role="dialog"
+            aria-label="Block commands"
+            hidden
+        >
+            <div class="slash-menu__search">
+                <span
+                    class="slash-menu__search-icon"
+                    aria-hidden="true"
+                >
+                    ⌕
+                </span>
+
+                <input
+                    id="slash-menu-search"
+                    class="slash-menu__search-input"
+                    type="text"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="Search block types"
+                    aria-label="Search block types"
+                >
+            </div>
+
+            <div
+                id="slash-menu-list"
+                class="slash-menu__list"
+                role="menu"
+            ></div>
+
+            <div
+                id="slash-menu-empty"
+                class="slash-menu__empty"
+                hidden
+            >
+                No commands found
+            </div>
+        </div>
+
+        <div
+            id="toast-region"
+            class="toast-region"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+        ></div>
+
+        <template id="block-template">
+            <div
+                class="block"
+                data-block-type="paragraph"
+            >
+                <div class="block__controls">
+                    <button
+                        class="block__add-button"
+                        type="button"
+                        aria-label="Add a block below"
+                        title="Add a block below"
+                    >
+                        ＋
+                    </button>
+
+                    <button
+                        class="block__handle"
+                        type="button"
+                        aria-label="Open block menu"
+                        aria-haspopup="menu"
+                        aria-expanded="false"
+                        title="Block menu"
+                    >
+                        ⠿
+                    </button>
+                </div>
+
+                <div class="block__body">
+                    <div
+                        class="block__prefix"
+                        aria-hidden="true"
+                    ></div>
+
+                    <div
+                        class="block__content"
+                        contenteditable="true"
+                        role="textbox"
+                        aria-multiline="true"
+                        spellcheck="true"
+                        data-placeholder="Type '/' for commands"
+                    ></div>
+                </div>
+            </div>
+        </template>
+    </div>
 </body>
 </html>
