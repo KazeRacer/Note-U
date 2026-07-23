@@ -1,21 +1,20 @@
 /**
  * Note-U
- * Version: 0.1.0
+ * Version: 0.2.0
  *
- * URL-based document persistence.
+ * URL-based document storage.
  *
  * This module is responsible for:
- * - creating the default document;
- * - validating and normalizing document data;
- * - serializing the document;
- * - encoding it inside the URL hash;
- * - loading it back from the current URL.
+ * - creating valid document models;
+ * - normalizing untrusted document data;
+ * - preserving nested block structures;
+ * - encoding documents into the URL;
+ * - decoding documents from the URL;
+ * - cloning document models safely;
+ * - generating unique block identifiers;
+ * - handling invalid or unsupported stored data.
  *
- * Note-U does not use:
- * - localStorage;
- * - cookies;
- * - a backend;
- * - a database.
+ * No document content is stored in local storage, cookies or a server.
  */
 
 (function () {
@@ -25,38 +24,62 @@
     // Constants
     // =========================================================================
 
-    const STORAGE_VERSION = 1;
-    const HASH_PREFIX = "#note=";
+    const DOCUMENT_VERSION = 1;
 
     const DEFAULT_TITLE = "Note";
     const DEFAULT_ICON = "📝";
     const DEFAULT_BLOCK_TYPE = "paragraph";
 
+    const URL_PARAMETER_NAME = "note";
+
     const MAX_TITLE_LENGTH = 180;
     const MAX_ICON_LENGTH = 16;
     const MAX_BLOCK_CONTENT_LENGTH = 100000;
-    const MAX_BLOCK_DEPTH = 50;
-    const MAX_BLOCKS = 5000;
+    const MAX_BLOCK_DEPTH = 20;
+    const MAX_BLOCK_COUNT = 5000;
+
+    const SUPPORTED_BLOCK_TYPES = Object.freeze([
+        "paragraph",
+        "heading-1",
+        "heading-2",
+        "bullet-list",
+        "numbered-list",
+        "checklist",
+        "quote",
+        "divider"
+    ]);
 
     // =========================================================================
-    // Default document
+    // Identifier generation
     // =========================================================================
 
     /**
-     * Creates a new empty Note-U document.
+     * Creates a unique identifier suitable for document blocks.
      *
-     * @returns {Object}
+     * @returns {string}
      */
-    function createDefaultDocument() {
-        return {
-            version: STORAGE_VERSION,
-            title: DEFAULT_TITLE,
-            icon: DEFAULT_ICON,
-            blocks: [
-                createDefaultBlock()
-            ]
-        };
+    function createId() {
+        if (
+            window.crypto &&
+            typeof window.crypto.randomUUID === "function"
+        ) {
+            return window.crypto.randomUUID();
+        }
+
+        const timestamp =
+            Date.now().toString(36);
+
+        const randomPart =
+            Math.random()
+                .toString(36)
+                .slice(2, 12);
+
+        return `block-${timestamp}-${randomPart}`;
     }
+
+    // =========================================================================
+    // Default models
+    // =========================================================================
 
     /**
      * Creates a new paragraph block.
@@ -65,90 +88,170 @@
      */
     function createDefaultBlock() {
         return {
-            id: createId("block"),
+            id: createId(),
             type: DEFAULT_BLOCK_TYPE,
             content: "",
             children: []
         };
     }
 
+    /**
+     * Creates a new empty document.
+     *
+     * @returns {Object}
+     */
+    function createDocument() {
+        return {
+            version: DOCUMENT_VERSION,
+            title: DEFAULT_TITLE,
+            icon: DEFAULT_ICON,
+            blocks: [
+                createDefaultBlock()
+            ]
+        };
+    }
+
     // =========================================================================
-    // Identifiers
+    // Document normalization
     // =========================================================================
 
     /**
-     * Creates a unique identifier.
+     * Converts unknown input into a valid document model.
      *
-     * @param {string} prefix
-     * @returns {string}
+     * @param {*} value
+     * @returns {Object}
      */
-    function createId(prefix = "item") {
-        if (
-            typeof crypto !== "undefined" &&
-            typeof crypto.randomUUID === "function"
-        ) {
-            return `${prefix}-${crypto.randomUUID()}`;
+    function normalizeDocument(value) {
+        if (!isPlainObject(value)) {
+            return createDocument();
         }
 
-        const timestamp = Date.now().toString(36);
-        const randomPart = Math.random().toString(36).slice(2, 12);
+        const normalizationState = {
+            blockCount: 0,
+            usedIds: new Set()
+        };
 
-        return `${prefix}-${timestamp}-${randomPart}`;
+        const blocks =
+            normalizeBlockCollection(
+                value.blocks,
+                0,
+                normalizationState
+            );
+
+        return {
+            version: DOCUMENT_VERSION,
+
+            title: normalizeTitle(value.title),
+
+            icon: normalizeIcon(value.icon),
+
+            blocks:
+                blocks.length > 0
+                    ? blocks
+                    : [createDefaultBlock()]
+        };
     }
 
-    // =========================================================================
-    // Type guards
-    // =========================================================================
-
     /**
-     * Checks whether a value is a plain object.
+     * Normalizes a collection of blocks.
      *
      * @param {*} value
-     * @returns {boolean}
+     * @param {number} depth
+     * @param {Object} state
+     * @param {number} state.blockCount
+     * @param {Set<string>} state.usedIds
+     * @returns {Array<Object>}
      */
-    function isPlainObject(value) {
-        return (
-            value !== null &&
-            typeof value === "object" &&
-            !Array.isArray(value)
-        );
-    }
-
-    /**
-     * Checks whether a value is a non-empty string.
-     *
-     * @param {*} value
-     * @returns {boolean}
-     */
-    function isNonEmptyString(value) {
-        return (
-            typeof value === "string" &&
-            value.trim().length > 0
-        );
-    }
-
-    // =========================================================================
-    // String normalization
-    // =========================================================================
-
-    /**
-     * Normalizes a string value.
-     *
-     * @param {*} value
-     * @param {string} fallback
-     * @param {number} maximumLength
-     * @returns {string}
-     */
-    function normalizeString(
+    function normalizeBlockCollection(
         value,
-        fallback = "",
-        maximumLength = Number.MAX_SAFE_INTEGER
+        depth,
+        state
     ) {
-        if (typeof value !== "string") {
-            return fallback;
+        if (
+            !Array.isArray(value) ||
+            depth > MAX_BLOCK_DEPTH ||
+            state.blockCount >= MAX_BLOCK_COUNT
+        ) {
+            return [];
         }
 
-        return value.slice(0, maximumLength);
+        const normalizedBlocks = [];
+
+        for (const item of value) {
+            if (state.blockCount >= MAX_BLOCK_COUNT) {
+                break;
+            }
+
+            const block =
+                normalizeBlock(
+                    item,
+                    depth,
+                    state
+                );
+
+            if (block) {
+                normalizedBlocks.push(block);
+            }
+        }
+
+        return normalizedBlocks;
+    }
+
+    /**
+     * Normalizes one block and its descendants.
+     *
+     * @param {*} value
+     * @param {number} depth
+     * @param {Object} state
+     * @returns {Object|null}
+     */
+    function normalizeBlock(
+        value,
+        depth,
+        state
+    ) {
+        if (
+            !isPlainObject(value) ||
+            depth > MAX_BLOCK_DEPTH ||
+            state.blockCount >= MAX_BLOCK_COUNT
+        ) {
+            return null;
+        }
+
+        state.blockCount += 1;
+
+        const type =
+            normalizeBlockType(value.type);
+
+        const block = {
+            id: normalizeBlockId(
+                value.id,
+                state.usedIds
+            ),
+
+            type,
+
+            content:
+                type === "divider"
+                    ? ""
+                    : normalizeBlockContent(
+                        value.content
+                    ),
+
+            children:
+                normalizeBlockCollection(
+                    value.children,
+                    depth + 1,
+                    state
+                )
+        };
+
+        if (type === "checklist") {
+            block.checked =
+                Boolean(value.checked);
+        }
+
+        return block;
     }
 
     /**
@@ -158,9 +261,12 @@
      * @returns {string}
      */
     function normalizeTitle(value) {
-        return normalizeString(
-            value,
-            DEFAULT_TITLE,
+        if (typeof value !== "string") {
+            return DEFAULT_TITLE;
+        }
+
+        return value.slice(
+            0,
             MAX_TITLE_LENGTH
         );
     }
@@ -172,396 +278,603 @@
      * @returns {string}
      */
     function normalizeIcon(value) {
-        const normalizedIcon = normalizeString(
-            value,
-            DEFAULT_ICON,
-            MAX_ICON_LENGTH
-        );
-
-        return normalizedIcon || DEFAULT_ICON;
-    }
-
-    // =========================================================================
-    // Block normalization
-    // =========================================================================
-
-    /**
-     * Normalizes a single block.
-     *
-     * @param {*} blockData
-     * @param {number} depth
-     * @param {Object} counter
-     * @returns {Object}
-     */
-    function normalizeBlock(blockData, depth, counter) {
-        const source = isPlainObject(blockData)
-            ? blockData
-            : {};
-
-        counter.value += 1;
-
-        const block = {
-            id: isNonEmptyString(source.id)
-                ? source.id
-                : createId("block"),
-
-            type: isNonEmptyString(source.type)
-                ? source.type
-                : DEFAULT_BLOCK_TYPE,
-
-            content: normalizeString(
-                source.content,
-                "",
-                MAX_BLOCK_CONTENT_LENGTH
-            ),
-
-            children: []
-        };
-
-        if (
-            depth >= MAX_BLOCK_DEPTH ||
-            counter.value >= MAX_BLOCKS ||
-            !Array.isArray(source.children)
-        ) {
-            return block;
+        if (typeof value !== "string") {
+            return DEFAULT_ICON;
         }
 
-        for (const childData of source.children) {
-            if (counter.value >= MAX_BLOCKS) {
-                break;
-            }
+        const trimmedValue = value.trim();
 
-            block.children.push(
-                normalizeBlock(
-                    childData,
-                    depth + 1,
-                    counter
-                )
-            );
+        if (!trimmedValue) {
+            return DEFAULT_ICON;
         }
 
-        return block;
+        return Array.from(trimmedValue)
+            .slice(0, MAX_ICON_LENGTH)
+            .join("");
     }
 
     /**
-     * Normalizes all root blocks.
+     * Normalizes a block identifier.
      *
-     * @param {*} blocksData
-     * @returns {Array<Object>}
-     */
-    function normalizeBlocks(blocksData) {
-        if (!Array.isArray(blocksData)) {
-            return [createDefaultBlock()];
-        }
-
-        const counter = {
-            value: 0
-        };
-
-        const blocks = [];
-
-        for (const blockData of blocksData) {
-            if (counter.value >= MAX_BLOCKS) {
-                break;
-            }
-
-            blocks.push(
-                normalizeBlock(
-                    blockData,
-                    0,
-                    counter
-                )
-            );
-        }
-
-        if (blocks.length === 0) {
-            blocks.push(createDefaultBlock());
-        }
-
-        return blocks;
-    }
-
-    // =========================================================================
-    // Document normalization
-    // =========================================================================
-
-    /**
-     * Normalizes a complete document.
+     * Duplicate or invalid identifiers are replaced.
      *
-     * The returned value always follows the current document schema.
-     *
-     * @param {*} documentData
-     * @returns {Object}
-     */
-    function normalizeDocument(documentData) {
-        if (!isPlainObject(documentData)) {
-            return createDefaultDocument();
-        }
-
-        return {
-            version: STORAGE_VERSION,
-            title: normalizeTitle(documentData.title),
-            icon: normalizeIcon(documentData.icon),
-            blocks: normalizeBlocks(documentData.blocks)
-        };
-    }
-
-    /**
-     * Creates a deep clone of a normalized document.
-     *
-     * @param {*} documentData
-     * @returns {Object}
-     */
-    function cloneDocument(documentData) {
-        return normalizeDocument(
-            JSON.parse(
-                JSON.stringify(
-                    normalizeDocument(documentData)
-                )
-            )
-        );
-    }
-
-    // =========================================================================
-    // UTF-8 Base64 URL encoding
-    // =========================================================================
-
-    /**
-     * Converts a UTF-8 string to URL-safe Base64.
-     *
-     * @param {string} value
+     * @param {*} value
+     * @param {Set<string>} usedIds
      * @returns {string}
      */
-    function encodeBase64Url(value) {
-        const bytes = new TextEncoder().encode(value);
+    function normalizeBlockId(
+        value,
+        usedIds
+    ) {
+        let id =
+            typeof value === "string"
+                ? value.trim()
+                : "";
 
-        let binary = "";
-
-        for (const byte of bytes) {
-            binary += String.fromCharCode(byte);
+        if (
+            !id ||
+            id.length > 160 ||
+            usedIds.has(id)
+        ) {
+            do {
+                id = createId();
+            } while (usedIds.has(id));
         }
 
-        return btoa(binary)
+        usedIds.add(id);
+
+        return id;
+    }
+
+    /**
+     * Normalizes a block type.
+     *
+     * @param {*} value
+     * @returns {string}
+     */
+    function normalizeBlockType(value) {
+        return SUPPORTED_BLOCK_TYPES.includes(value)
+            ? value
+            : DEFAULT_BLOCK_TYPE;
+    }
+
+    /**
+     * Normalizes block text content.
+     *
+     * @param {*} value
+     * @returns {string}
+     */
+    function normalizeBlockContent(value) {
+        if (typeof value !== "string") {
+            return "";
+        }
+
+        return value
+            .replace(/\r\n?/g, "\n")
+            .slice(0, MAX_BLOCK_CONTENT_LENGTH);
+    }
+
+    // =========================================================================
+    // Cloning
+    // =========================================================================
+
+    /**
+     * Creates a safe deep clone of a document model.
+     *
+     * The returned value is also normalized.
+     *
+     * @param {*} documentModel
+     * @returns {Object}
+     */
+    function cloneDocument(documentModel) {
+        return normalizeDocument(
+            deepClone(documentModel)
+        );
+    }
+
+    /**
+     * Creates a deep clone of JSON-compatible data.
+     *
+     * @param {*} value
+     * @returns {*}
+     */
+    function deepClone(value) {
+        if (
+            typeof structuredClone === "function"
+        ) {
+            try {
+                return structuredClone(value);
+            } catch (error) {
+                console.warn(
+                    "Note-U could not clone data with structuredClone.",
+                    error
+                );
+            }
+        }
+
+        try {
+            return JSON.parse(
+                JSON.stringify(value)
+            );
+        } catch (error) {
+            console.warn(
+                "Note-U could not clone the document model.",
+                error
+            );
+
+            return null;
+        }
+    }
+
+    // =========================================================================
+    // URL encoding
+    // =========================================================================
+
+    /**
+     * Encodes a document into a compact URL-safe string.
+     *
+     * @param {*} documentModel
+     * @returns {string}
+     */
+    function encodeDocument(documentModel) {
+        const normalizedDocument =
+            normalizeDocument(documentModel);
+
+        const json =
+            JSON.stringify(normalizedDocument);
+
+        const bytes =
+            new TextEncoder().encode(json);
+
+        return bytesToBase64Url(bytes);
+    }
+
+    /**
+     * Decodes a URL-safe document string.
+     *
+     * @param {*} encodedValue
+     * @returns {Object|null}
+     */
+    function decodeDocument(encodedValue) {
+        if (
+            typeof encodedValue !== "string" ||
+            encodedValue.length === 0
+        ) {
+            return null;
+        }
+
+        try {
+            const bytes =
+                base64UrlToBytes(encodedValue);
+
+            const json =
+                new TextDecoder(
+                    "utf-8",
+                    {
+                        fatal: true
+                    }
+                ).decode(bytes);
+
+            const parsedValue =
+                JSON.parse(json);
+
+            return normalizeDocument(parsedValue);
+        } catch (error) {
+            console.warn(
+                "Note-U could not decode the document from the URL.",
+                error
+            );
+
+            return null;
+        }
+    }
+
+    /**
+     * Converts bytes into URL-safe Base64.
+     *
+     * @param {Uint8Array} bytes
+     * @returns {string}
+     */
+    function bytesToBase64Url(bytes) {
+        let binary = "";
+
+        const chunkSize = 0x8000;
+
+        for (
+            let offset = 0;
+            offset < bytes.length;
+            offset += chunkSize
+        ) {
+            const chunk =
+                bytes.subarray(
+                    offset,
+                    offset + chunkSize
+                );
+
+            binary += String.fromCharCode(
+                ...chunk
+            );
+        }
+
+        return window
+            .btoa(binary)
             .replace(/\+/g, "-")
             .replace(/\//g, "_")
             .replace(/=+$/g, "");
     }
 
     /**
-     * Converts URL-safe Base64 back to a UTF-8 string.
+     * Converts URL-safe Base64 into bytes.
      *
      * @param {string} value
-     * @returns {string}
+     * @returns {Uint8Array}
      */
-    function decodeBase64Url(value) {
-        const normalizedValue = value
-            .replace(/-/g, "+")
-            .replace(/_/g, "/");
+    function base64UrlToBytes(value) {
+        const normalizedValue =
+            value
+                .replace(/-/g, "+")
+                .replace(/_/g, "/");
 
         const paddingLength =
-            (4 - (normalizedValue.length % 4)) % 4;
+            (
+                4 -
+                (
+                    normalizedValue.length %
+                    4
+                )
+            ) % 4;
 
         const paddedValue =
-            normalizedValue + "=".repeat(paddingLength);
+            normalizedValue +
+            "=".repeat(paddingLength);
 
-        const binary = atob(paddedValue);
+        const binary =
+            window.atob(paddedValue);
 
-        const bytes = Uint8Array.from(
-            binary,
-            character => character.charCodeAt(0)
-        );
+        const bytes =
+            new Uint8Array(binary.length);
 
-        return new TextDecoder().decode(bytes);
+        for (
+            let index = 0;
+            index < binary.length;
+            index += 1
+        ) {
+            bytes[index] =
+                binary.charCodeAt(index);
+        }
+
+        return bytes;
     }
 
     // =========================================================================
-    // Serialization
+    // URL operations
     // =========================================================================
 
     /**
-     * Serializes a document into a compact URL-safe string.
+     * Loads a document from a URL.
      *
-     * @param {*} documentData
-     * @returns {string}
-     */
-    function serializeDocument(documentData) {
-        const normalizedDocument =
-            normalizeDocument(documentData);
-
-        const json = JSON.stringify(normalizedDocument);
-
-        return encodeBase64Url(json);
-    }
-
-    /**
-     * Deserializes a document from a URL-safe string.
+     * A new empty document is returned when no stored document exists.
      *
-     * @param {string} serializedValue
+     * @param {string|URL} [urlValue]
      * @returns {Object}
      */
-    function deserializeDocument(serializedValue) {
-        if (
-            typeof serializedValue !== "string" ||
-            serializedValue.length === 0
-        ) {
-            return createDefaultDocument();
+    function loadDocumentFromUrl(
+        urlValue = window.location.href
+    ) {
+        const url =
+            createUrl(urlValue);
+
+        const encodedDocument =
+            getEncodedDocumentFromUrl(url);
+
+        if (!encodedDocument) {
+            return createDocument();
         }
 
-        try {
-            const json = decodeBase64Url(serializedValue);
-            const parsedDocument = JSON.parse(json);
-
-            return normalizeDocument(parsedDocument);
-        } catch (error) {
-            console.error(
-                "Note-U could not read the document from the URL.",
-                error
-            );
-
-            return createDefaultDocument();
-        }
+        return (
+            decodeDocument(encodedDocument) ||
+            createDocument()
+        );
     }
 
-    // =========================================================================
-    // URL hash
-    // =========================================================================
-
     /**
-     * Returns the serialized document stored in the current hash.
+     * Returns the encoded document payload from a URL.
      *
+     * Query-string storage is checked first.
+     * Hash-based legacy storage is supported as a fallback.
+     *
+     * @param {URL} url
      * @returns {string}
      */
-    function getSerializedDocumentFromHash() {
-        const hash = window.location.hash;
+    function getEncodedDocumentFromUrl(url) {
+        const queryValue =
+            url.searchParams.get(
+                URL_PARAMETER_NAME
+            );
 
-        if (!hash.startsWith(HASH_PREFIX)) {
+        if (queryValue) {
+            return queryValue;
+        }
+
+        const hashValue =
+            url.hash.startsWith("#")
+                ? url.hash.slice(1)
+                : url.hash;
+
+        if (!hashValue) {
             return "";
         }
 
-        return hash.slice(HASH_PREFIX.length);
+        if (
+            hashValue.startsWith(
+                `${URL_PARAMETER_NAME}=`
+            )
+        ) {
+            const hashParameters =
+                new URLSearchParams(hashValue);
+
+            return (
+                hashParameters.get(
+                    URL_PARAMETER_NAME
+                ) || ""
+            );
+        }
+
+        return hashValue;
     }
 
     /**
-     * Checks whether the current URL contains a Note-U document.
+     * Builds a URL containing a document.
      *
+     * @param {*} documentModel
+     * @param {Object} [options]
+     * @param {string|URL} [options.baseUrl]
+     * @returns {string}
+     */
+    function createDocumentUrl(
+        documentModel,
+        options = {}
+    ) {
+        const url =
+            createUrl(
+                options.baseUrl ||
+                window.location.href
+            );
+
+        const encodedDocument =
+            encodeDocument(documentModel);
+
+        url.searchParams.set(
+            URL_PARAMETER_NAME,
+            encodedDocument
+        );
+
+        url.hash = "";
+
+        return url.toString();
+    }
+
+    /**
+     * Writes a document into the current browser URL.
+     *
+     * This does not reload the page.
+     *
+     * @param {*} documentModel
+     * @param {Object} [options]
+     * @param {boolean} [options.replace]
+     * @returns {string}
+     */
+    function writeDocumentToUrl(
+        documentModel,
+        options = {}
+    ) {
+        const url =
+            createDocumentUrl(
+                documentModel,
+                {
+                    baseUrl:
+                        window.location.href
+                }
+            );
+
+        const historyMethod =
+            options.replace === false
+                ? "pushState"
+                : "replaceState";
+
+        window.history[historyMethod](
+            {
+                noteU: true
+            },
+            "",
+            url
+        );
+
+        return url;
+    }
+
+    /**
+     * Removes stored document data from the current URL.
+     *
+     * @param {Object} [options]
+     * @param {boolean} [options.replace]
+     * @returns {string}
+     */
+    function clearDocumentFromUrl(
+        options = {}
+    ) {
+        const url =
+            createUrl(window.location.href);
+
+        url.searchParams.delete(
+            URL_PARAMETER_NAME
+        );
+
+        url.hash = "";
+
+        const historyMethod =
+            options.replace === false
+                ? "pushState"
+                : "replaceState";
+
+        window.history[historyMethod](
+            {
+                noteU: true
+            },
+            "",
+            url.toString()
+        );
+
+        return url.toString();
+    }
+
+    /**
+     * Checks whether a URL contains document data.
+     *
+     * @param {string|URL} [urlValue]
      * @returns {boolean}
      */
-    function hasDocumentInUrl() {
-        return window.location.hash.startsWith(HASH_PREFIX);
-    }
+    function hasDocumentInUrl(
+        urlValue = window.location.href
+    ) {
+        const url =
+            createUrl(urlValue);
 
-    /**
-     * Loads the current document from the URL.
-     *
-     * @returns {Object}
-     */
-    function loadDocumentFromUrl() {
-        const serializedDocument =
-            getSerializedDocumentFromHash();
-
-        return deserializeDocument(serializedDocument);
-    }
-
-    /**
-     * Writes a document to the current URL without creating
-     * a new browser history entry.
-     *
-     * @param {*} documentData
-     * @returns {string}
-     */
-    function saveDocumentToUrl(documentData) {
-        const serializedDocument =
-            serializeDocument(documentData);
-
-        const newHash =
-            `${HASH_PREFIX}${serializedDocument}`;
-
-        const newUrl =
-            `${window.location.pathname}` +
-            `${window.location.search}` +
-            newHash;
-
-        window.history.replaceState(
-            null,
-            "",
-            newUrl
-        );
-
-        return window.location.href;
-    }
-
-    /**
-     * Removes the document hash from the current URL.
-     */
-    function clearDocumentFromUrl() {
-        const cleanUrl =
-            `${window.location.pathname}` +
-            `${window.location.search}`;
-
-        window.history.replaceState(
-            null,
-            "",
-            cleanUrl
+        return Boolean(
+            getEncodedDocumentFromUrl(url)
         );
     }
 
     /**
-     * Returns a complete shareable URL for a document.
+     * Creates a URL instance safely.
      *
-     * This method does not modify the current browser URL.
-     *
-     * @param {*} documentData
-     * @returns {string}
+     * @param {string|URL} value
+     * @returns {URL}
      */
-    function createShareableUrl(documentData) {
-        const serializedDocument =
-            serializeDocument(documentData);
+    function createUrl(value) {
+        if (value instanceof URL) {
+            return new URL(value.toString());
+        }
 
-        const baseUrl =
-            `${window.location.origin}` +
-            `${window.location.pathname}` +
-            `${window.location.search}`;
-
-        return `${baseUrl}${HASH_PREFIX}${serializedDocument}`;
+        return new URL(
+            String(value),
+            window.location.href
+        );
     }
 
     // =========================================================================
-    // URL size information
+    // Document inspection
     // =========================================================================
 
     /**
-     * Returns the approximate byte size of a string.
+     * Returns the total number of blocks in a document.
      *
-     * @param {string} value
+     * Nested blocks are included.
+     *
+     * @param {*} documentModel
      * @returns {number}
      */
-    function getUtf8ByteLength(value) {
-        return new TextEncoder().encode(value).length;
+    function countBlocks(documentModel) {
+        const normalizedDocument =
+            normalizeDocument(documentModel);
+
+        let count = 0;
+
+        function visit(blocks) {
+            for (const block of blocks) {
+                count += 1;
+                visit(block.children);
+            }
+        }
+
+        visit(normalizedDocument.blocks);
+
+        return count;
     }
 
     /**
-     * Returns storage statistics for a document.
+     * Checks whether a document contains meaningful user content.
      *
-     * @param {*} documentData
-     * @returns {Object}
+     * @param {*} documentModel
+     * @returns {boolean}
      */
-    function getDocumentStorageInfo(documentData) {
-        const serializedDocument =
-            serializeDocument(documentData);
+    function hasMeaningfulContent(documentModel) {
+        const documentValue =
+            normalizeDocument(documentModel);
 
-        const fullUrl =
-            `${window.location.origin}` +
-            `${window.location.pathname}` +
-            `${window.location.search}` +
-            `${HASH_PREFIX}${serializedDocument}`;
+        if (
+            documentValue.title.trim() !==
+            DEFAULT_TITLE
+        ) {
+            return true;
+        }
 
-        return {
-            serializedLength: serializedDocument.length,
-            serializedBytes:
-                getUtf8ByteLength(serializedDocument),
-            urlLength: fullUrl.length,
-            urlBytes: getUtf8ByteLength(fullUrl)
-        };
+        if (
+            documentValue.icon !==
+            DEFAULT_ICON
+        ) {
+            return true;
+        }
+
+        return documentValue.blocks.some(
+            hasMeaningfulBlockContent
+        );
+    }
+
+    /**
+     * Checks one block and its descendants for meaningful content.
+     *
+     * @param {Object} block
+     * @returns {boolean}
+     */
+    function hasMeaningfulBlockContent(block) {
+        if (block.type === "divider") {
+            return true;
+        }
+
+        if (
+            block.content.trim().length > 0
+        ) {
+            return true;
+        }
+
+        if (
+            block.type === "checklist" &&
+            block.checked
+        ) {
+            return true;
+        }
+
+        return block.children.some(
+            hasMeaningfulBlockContent
+        );
+    }
+
+    // =========================================================================
+    // Validation helpers
+    // =========================================================================
+
+    /**
+     * Checks whether a value is a plain object.
+     *
+     * @param {*} value
+     * @returns {boolean}
+     */
+    function isPlainObject(value) {
+        if (
+            value === null ||
+            typeof value !== "object"
+        ) {
+            return false;
+        }
+
+        const prototype =
+            Object.getPrototypeOf(value);
+
+        return (
+            prototype === Object.prototype ||
+            prototype === null
+        );
     }
 
     // =========================================================================
@@ -569,25 +882,30 @@
     // =========================================================================
 
     window.NoteUStorage = Object.freeze({
-        version: STORAGE_VERSION,
+        DOCUMENT_VERSION,
+        DEFAULT_TITLE,
+        DEFAULT_ICON,
+        DEFAULT_BLOCK_TYPE,
+        URL_PARAMETER_NAME,
+        SUPPORTED_BLOCK_TYPES,
 
         createId,
+        createDocument,
         createDefaultBlock,
-        createDefaultDocument,
 
-        normalizeBlock,
         normalizeDocument,
         cloneDocument,
 
-        serializeDocument,
-        deserializeDocument,
+        encodeDocument,
+        decodeDocument,
 
-        hasDocumentInUrl,
         loadDocumentFromUrl,
-        saveDocumentToUrl,
+        createDocumentUrl,
+        writeDocumentToUrl,
         clearDocumentFromUrl,
-        createShareableUrl,
+        hasDocumentInUrl,
 
-        getDocumentStorageInfo
+        countBlocks,
+        hasMeaningfulContent
     });
 })();
