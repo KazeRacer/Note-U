@@ -1,17 +1,18 @@
 /**
  * Note-U
- * Version: 0.1.0
+ * Version: 0.2.0
  *
- * Main application controller.
+ * Application controller.
  *
  * This module is responsible for:
  * - loading the document from the current URL;
- * - initializing the editor and user interface;
- * - keeping document metadata and blocks synchronized;
- * - saving changes back to the URL;
+ * - initializing the editor and interface;
+ * - combining editor content with document metadata;
+ * - saving changes back into the URL;
+ * - creating shareable links;
  * - creating new notes;
- * - handling browser navigation and hash changes;
- * - reporting application errors.
+ * - handling browser history navigation;
+ * - recovering from invalid document data.
  */
 
 (function () {
@@ -21,10 +22,8 @@
     // Constants
     // =========================================================================
 
-    const SAVE_DELAY = 350;
-
-    const URL_WARNING_LENGTH = 8000;
-    const URL_CRITICAL_LENGTH = 24000;
+    const SAVE_DELAY = 300;
+    const HISTORY_LOAD_DELAY = 0;
 
     // =========================================================================
     // Internal state
@@ -33,89 +32,99 @@
     let currentDocument = null;
 
     let saveTimer = null;
-    let isInitialized = false;
-    let isSaving = false;
-    let isLoadingExternalDocument = false;
+    let historyLoadTimer = null;
 
-    let lastSavedSerialization = "";
-    let lastUrlWarningLevel = "none";
+    let isInitialized = false;
+    let isApplyingExternalDocument = false;
+    let isSaving = false;
+
+    let lastSavedUrl = "";
+    let lastSavedDocumentSignature = "";
 
     // =========================================================================
     // Application startup
     // =========================================================================
 
     /**
-     * Starts Note-U after the DOM is ready.
+     * Starts Note-U after the document is ready.
      */
     function start() {
         try {
-            validateModules();
+            validateDependencies();
 
             currentDocument =
                 window.NoteUStorage.loadDocumentFromUrl();
 
-            initializeUserInterface();
             initializeEditor();
-
-            synchronizeDocumentFromModules();
-            saveCurrentDocumentImmediately();
-
+            initializeInterface();
             bindApplicationEvents();
 
-            window.NoteUUI.setLoading(false);
-            window.NoteUUI.showSavedStatus();
+            synchronizeApplicationDocument();
+            updateSavedState();
 
             isInitialized = true;
+
+            window.NoteUUI.setLoading(false);
         } catch (error) {
-            handleFatalError(error);
+            handleStartupError(error);
         }
     }
 
     /**
-     * Checks that all required application modules are available.
+     * Validates required global modules.
      */
-    function validateModules() {
-        const missingModules = [];
+    function validateDependencies() {
+        const missingDependencies = [];
 
         if (!window.NoteUStorage) {
-            missingModules.push("NoteUStorage");
+            missingDependencies.push(
+                "NoteUStorage"
+            );
         }
 
         if (!window.NoteUEditor) {
-            missingModules.push("NoteUEditor");
+            missingDependencies.push(
+                "NoteUEditor"
+            );
         }
 
         if (!window.NoteUUI) {
-            missingModules.push("NoteUUI");
+            missingDependencies.push(
+                "NoteUUI"
+            );
         }
 
-        if (missingModules.length > 0) {
+        if (missingDependencies.length > 0) {
             throw new Error(
-                `Note-U could not start because these modules are missing: ${missingModules.join(", ")}`
+                `Note-U is missing required modules: ${missingDependencies.join(", ")}`
+            );
+        }
+
+        const requiredElements = {
+            editor:
+                document.getElementById("editor"),
+
+            blockList:
+                document.getElementById("block-list"),
+
+            blockTemplate:
+                document.getElementById("block-template")
+        };
+
+        const missingElements =
+            Object.entries(requiredElements)
+                .filter(([, value]) => !value)
+                .map(([name]) => name);
+
+        if (missingElements.length > 0) {
+            throw new Error(
+                `Note-U is missing required document elements: ${missingElements.join(", ")}`
             );
         }
     }
 
     /**
-     * Initializes the user interface module.
-     */
-    function initializeUserInterface() {
-        window.NoteUUI.initialize({
-            documentModel: currentDocument,
-
-            onDocumentChange:
-                handleUserInterfaceChange,
-
-            onNewNote:
-                createNewNote,
-
-            onCopyLink:
-                prepareShareableUrl
-        });
-    }
-
-    /**
-     * Initializes the editor module.
+     * Initializes the block editor.
      */
     function initializeEditor() {
         const editorRoot =
@@ -124,10 +133,8 @@
         const blockListElement =
             document.getElementById("block-list");
 
-const blockTemplate =
-    document.getElementById(
-        "block-template"
-    );
+        const blockTemplate =
+            document.getElementById("block-template");
 
         window.NoteUEditor.initialize({
             editorRoot,
@@ -138,22 +145,33 @@ const blockTemplate =
         });
     }
 
-    // =========================================================================
-    // Application events
-    // =========================================================================
+    /**
+     * Initializes the interface controller.
+     */
+    function initializeInterface() {
+        window.NoteUUI.initialize({
+            documentModel: currentDocument,
+            onDocumentChange:
+                handleInterfaceDocumentChange,
+            onNewNote:
+                createNewNote,
+            onCopyLink:
+                createCurrentDocumentUrl
+        });
+    }
 
     /**
-     * Registers global application event listeners.
+     * Registers application-level events.
      */
     function bindApplicationEvents() {
         window.addEventListener(
-            "hashchange",
-            handleHashChange
+            "popstate",
+            handleHistoryNavigation
         );
 
         window.addEventListener(
-            "popstate",
-            handleBrowserNavigation
+            "hashchange",
+            handleHistoryNavigation
         );
 
         window.addEventListener(
@@ -168,22 +186,65 @@ const blockTemplate =
     }
 
     // =========================================================================
-    // Document synchronization
+    // Change handling
     // =========================================================================
 
     /**
-     * Handles changes originating from the block editor.
+     * Handles editor content changes.
      *
      * @param {Object} editorDocument
-     * @param {Object} changeInformation
      */
-    function handleEditorChange(
-        editorDocument,
-        changeInformation
-    ) {
-        if (isLoadingExternalDocument) {
+    function handleEditorChange(editorDocument) {
+        if (isApplyingExternalDocument) {
             return;
         }
+
+        const metadataDocument =
+            window.NoteUUI.getDocument();
+
+        currentDocument =
+            window.NoteUStorage.normalizeDocument({
+                ...editorDocument,
+                title: metadataDocument.title,
+                icon: metadataDocument.icon
+            });
+
+        scheduleSave();
+    }
+
+    /**
+     * Handles title and icon changes.
+     *
+     * @param {Object} interfaceDocument
+     */
+    function handleInterfaceDocumentChange(
+        interfaceDocument
+    ) {
+        if (isApplyingExternalDocument) {
+            return;
+        }
+
+        const editorDocument =
+            window.NoteUEditor.getDocument();
+
+        currentDocument =
+            window.NoteUStorage.normalizeDocument({
+                ...editorDocument,
+                title: interfaceDocument.title,
+                icon: interfaceDocument.icon
+            });
+
+        scheduleSave();
+    }
+
+    /**
+     * Combines the latest editor content and interface metadata.
+     *
+     * @returns {Object}
+     */
+    function synchronizeApplicationDocument() {
+        const editorDocument =
+            window.NoteUEditor.getDocument();
 
         const interfaceDocument =
             window.NoteUUI.getDocument();
@@ -195,100 +256,7 @@ const blockTemplate =
                 icon: interfaceDocument.icon
             });
 
-        scheduleSave(
-            changeInformation?.reason || "editor-change"
-        );
-    }
-
-    /**
-     * Handles changes originating from the user interface.
-     *
-     * @param {Object} interfaceDocument
-     * @param {Object} changeInformation
-     */
-    function handleUserInterfaceChange(
-        interfaceDocument,
-        changeInformation
-    ) {
-        if (isLoadingExternalDocument) {
-            return;
-        }
-
-        const editorDocument =
-            window.NoteUEditor.getDocument();
-
-        currentDocument =
-            window.NoteUStorage.normalizeDocument({
-                ...interfaceDocument,
-                blocks: editorDocument.blocks
-            });
-
-        scheduleSave(
-            changeInformation?.reason || "interface-change"
-        );
-    }
-
-    /**
-     * Rebuilds the current document from both application modules.
-     *
-     * The UI owns title and icon.
-     * The editor owns the block tree.
-     *
-     * @returns {Object}
-     */
-    function synchronizeDocumentFromModules() {
-        const interfaceDocument =
-            window.NoteUUI.getDocument();
-
-        const editorDocument =
-            window.NoteUEditor.getDocument();
-
-        currentDocument =
-            window.NoteUStorage.normalizeDocument({
-                version: currentDocument?.version,
-                title: interfaceDocument.title,
-                icon: interfaceDocument.icon,
-                blocks: editorDocument.blocks
-            });
-
         return currentDocument;
-    }
-
-    /**
-     * Applies a complete document to all application modules.
-     *
-     * @param {*} nextDocument
-     * @param {Object} [options]
-     * @param {boolean} [options.focusEditor]
-     */
-    function applyDocument(
-        nextDocument,
-        options = {}
-    ) {
-        isLoadingExternalDocument = true;
-
-        try {
-            currentDocument =
-                window.NoteUStorage.normalizeDocument(
-                    nextDocument
-                );
-
-            window.NoteUUI.setDocument(
-                currentDocument
-            );
-
-            window.NoteUEditor.setDocument(
-                currentDocument
-            );
-
-            if (options.focusEditor) {
-                requestAnimationFrame(() => {
-                    window.NoteUEditor.focusFirstBlock();
-                });
-            }
-        } finally {
-            isLoadingExternalDocument = false;
-        }
     }
 
     // =========================================================================
@@ -296,12 +264,13 @@ const blockTemplate =
     // =========================================================================
 
     /**
-     * Schedules a document save.
-     *
-     * @param {string} reason
+     * Schedules an automatic URL save.
      */
-    function scheduleSave(reason = "change") {
-        if (isLoadingExternalDocument) {
+    function scheduleSave() {
+        if (
+            !isInitialized ||
+            isApplyingExternalDocument
+        ) {
             return;
         }
 
@@ -311,19 +280,27 @@ const blockTemplate =
 
         saveTimer = window.setTimeout(
             () => {
-                saveCurrentDocument(reason);
+                saveCurrentDocument();
             },
             SAVE_DELAY
         );
     }
 
     /**
-     * Saves the current document to the URL.
+     * Saves the current document into the browser URL.
      *
-     * @param {string} reason
+     * @param {Object} [options]
+     * @param {boolean} [options.force]
      * @returns {string}
      */
-    function saveCurrentDocument(reason = "change") {
+    function saveCurrentDocument(options = {}) {
+        if (isApplyingExternalDocument) {
+            return window.location.href;
+        }
+
+        clearTimeout(saveTimer);
+        saveTimer = null;
+
         if (isSaving) {
             return window.location.href;
         }
@@ -331,32 +308,41 @@ const blockTemplate =
         isSaving = true;
 
         try {
-            synchronizeDocumentFromModules();
+            synchronizeApplicationDocument();
 
-            const serializedDocument =
-                window.NoteUStorage.serializeDocument(
+            const documentSignature =
+                createDocumentSignature(
                     currentDocument
                 );
 
             if (
-                serializedDocument !==
-                lastSavedSerialization
+                !options.force &&
+                documentSignature ===
+                    lastSavedDocumentSignature
             ) {
-                window.NoteUStorage.saveDocumentToUrl(
-                    currentDocument
-                );
+                window.NoteUUI.showSavedStatus();
 
-                lastSavedSerialization =
-                    serializedDocument;
+                return (
+                    lastSavedUrl ||
+                    window.location.href
+                );
             }
 
-            checkUrlSize();
+            const nextUrl =
+                window.NoteUStorage.writeDocumentToUrl(
+                    currentDocument,
+                    {
+                        replace: true
+                    }
+                );
+
+            lastSavedUrl = nextUrl;
+            lastSavedDocumentSignature =
+                documentSignature;
 
             window.NoteUUI.showSavedStatus();
 
-            dispatchDocumentSavedEvent(reason);
-
-            return window.location.href;
+            return nextUrl;
         } catch (error) {
             console.error(
                 "Note-U could not save the document.",
@@ -365,120 +351,79 @@ const blockTemplate =
 
             window.NoteUUI.showSaveError();
 
-            window.NoteUUI.showToast(
-                "Impossibile salvare la nota nel link",
-                {
-                    type: "error"
-                }
-            );
-
-            throw error;
+            return window.location.href;
         } finally {
             isSaving = false;
         }
     }
 
     /**
-     * Saves immediately and cancels any pending delayed save.
+     * Returns a shareable URL for the latest document state.
      *
      * @returns {string}
      */
-    function saveCurrentDocumentImmediately() {
+    function createCurrentDocumentUrl() {
         clearTimeout(saveTimer);
         saveTimer = null;
 
-        return saveCurrentDocument(
-            "immediate-save"
-        );
+        synchronizeApplicationDocument();
+
+        const url =
+            window.NoteUStorage.createDocumentUrl(
+                currentDocument
+            );
+
+        const documentSignature =
+            createDocumentSignature(
+                currentDocument
+            );
+
+        if (url !== window.location.href) {
+            window.history.replaceState(
+                {
+                    noteU: true
+                },
+                "",
+                url
+            );
+        }
+
+        lastSavedUrl = url;
+        lastSavedDocumentSignature =
+            documentSignature;
+
+        window.NoteUUI.showSavedStatus();
+
+        return url;
     }
 
     /**
-     * Ensures that the shareable URL contains the latest changes.
+     * Creates a stable signature for change detection.
      *
+     * @param {Object} documentModel
      * @returns {string}
      */
-    function prepareShareableUrl() {
-        saveCurrentDocumentImmediately();
-
-        return window.NoteUStorage.createShareableUrl(
-            currentDocument
-        );
-    }
-
-    /**
-     * Emits an application event after a successful save.
-     *
-     * @param {string} reason
-     */
-    function dispatchDocumentSavedEvent(reason) {
-        window.dispatchEvent(
-            new CustomEvent(
-                "noteu:documentsaved",
-                {
-                    detail: {
-                        reason,
-                        document:
-                            window.NoteUStorage.cloneDocument(
-                                currentDocument
-                            ),
-                        url: window.location.href
-                    }
-                }
+    function createDocumentSignature(
+        documentModel
+    ) {
+        return JSON.stringify(
+            window.NoteUStorage.normalizeDocument(
+                documentModel
             )
         );
     }
 
-    // =========================================================================
-    // URL size monitoring
-    // =========================================================================
-
     /**
-     * Checks whether the generated URL is becoming too large.
+     * Updates internal information about the saved state.
      */
-    function checkUrlSize() {
-        const storageInformation =
-            window.NoteUStorage.getDocumentStorageInfo(
+    function updateSavedState() {
+        lastSavedUrl =
+            window.location.href;
+
+        lastSavedDocumentSignature =
+            createDocumentSignature(
                 currentDocument
             );
-
-        let warningLevel = "none";
-
-        if (
-            storageInformation.urlLength >=
-            URL_CRITICAL_LENGTH
-        ) {
-            warningLevel = "critical";
-        } else if (
-            storageInformation.urlLength >=
-            URL_WARNING_LENGTH
-        ) {
-            warningLevel = "warning";
-        }
-
-        if (warningLevel === lastUrlWarningLevel) {
-            return;
-        }
-
-        lastUrlWarningLevel = warningLevel;
-
-        if (warningLevel === "warning") {
-            window.NoteUUI.showToast(
-                "La nota sta diventando molto grande. Alcuni servizi potrebbero non accettare il link completo.",
-                {
-                    duration: 5200
-                }
-            );
-        }
-
-        if (warningLevel === "critical") {
-            window.NoteUUI.showToast(
-                "Il link della nota è molto lungo e potrebbe non funzionare in tutti i browser o servizi.",
-                {
-                    type: "error",
-                    duration: 6500
-                }
-            );
-        }
     }
 
     // =========================================================================
@@ -486,108 +431,136 @@ const blockTemplate =
     // =========================================================================
 
     /**
-     * Creates and opens a new empty note.
+     * Creates and displays a new empty note.
      */
     function createNewNote() {
         clearTimeout(saveTimer);
         saveTimer = null;
 
-        const newDocument =
-            window.NoteUStorage.createDefaultDocument();
+        const nextDocument =
+            window.NoteUStorage.createDocument();
 
-        window.NoteUStorage.clearDocumentFromUrl();
+        isApplyingExternalDocument = true;
 
-        lastSavedSerialization = "";
-        lastUrlWarningLevel = "none";
+        try {
+            currentDocument = nextDocument;
 
-        applyDocument(
-            newDocument,
-            {
-                focusEditor: false
-            }
-        );
+            window.NoteUEditor.setDocument(
+                nextDocument
+            );
 
-        saveCurrentDocumentImmediately();
+            window.NoteUUI.setDocument(
+                nextDocument
+            );
 
-        window.scrollTo({
-            top: 0,
-            behavior: getPreferredScrollBehavior()
-        });
+            const nextUrl =
+                window.NoteUStorage.clearDocumentFromUrl({
+                    replace: false
+                });
 
-        requestAnimationFrame(() => {
-            const titleInput =
-                document.getElementById(
-                    "document-title"
+            lastSavedUrl = nextUrl;
+
+            lastSavedDocumentSignature =
+                createDocumentSignature(
+                    nextDocument
                 );
 
-            if (
-                titleInput instanceof
-                HTMLTextAreaElement
-            ) {
-                titleInput.focus();
-                titleInput.select();
-            }
-        });
+            window.NoteUUI.showSavedStatus();
 
-        window.NoteUUI.showToast(
-            "Nuova nota creata"
+            requestAnimationFrame(() => {
+                const titleInput =
+                    document.getElementById(
+                        "document-title"
+                    );
+
+                if (
+                    titleInput instanceof
+                    HTMLTextAreaElement
+                ) {
+                    titleInput.focus();
+                    titleInput.select();
+                }
+            });
+        } catch (error) {
+            console.error(
+                "Note-U could not create a new note.",
+                error
+            );
+
+            window.NoteUUI.showToast(
+                "The new note could not be created",
+                {
+                    type: "error"
+                }
+            );
+        } finally {
+            isApplyingExternalDocument = false;
+        }
+    }
+
+    // =========================================================================
+    // Browser history
+    // =========================================================================
+
+    /**
+     * Handles browser back and forward navigation.
+     */
+    function handleHistoryNavigation() {
+        clearTimeout(historyLoadTimer);
+
+        historyLoadTimer = window.setTimeout(
+            loadDocumentFromCurrentUrl,
+            HISTORY_LOAD_DELAY
         );
     }
 
-    // =========================================================================
-    // Browser navigation
-    // =========================================================================
-
     /**
-     * Handles changes to the URL hash.
-     */
-    function handleHashChange() {
-        loadDocumentFromCurrentUrl();
-    }
-
-    /**
-     * Handles browser history navigation.
-     */
-    function handleBrowserNavigation() {
-        loadDocumentFromCurrentUrl();
-    }
-
-    /**
-     * Loads the document represented by the current URL.
+     * Loads and applies the document in the current URL.
      */
     function loadDocumentFromCurrentUrl() {
-        if (!isInitialized || isSaving) {
-            return;
-        }
-
-        const serializedDocument =
-            getCurrentSerializedDocument();
-
-        if (
-            serializedDocument ===
-            lastSavedSerialization
-        ) {
+        if (!isInitialized) {
             return;
         }
 
         clearTimeout(saveTimer);
         saveTimer = null;
 
+        const nextDocument =
+            window.NoteUStorage.loadDocumentFromUrl();
+
+        const nextSignature =
+            createDocumentSignature(
+                nextDocument
+            );
+
+        if (
+            nextSignature ===
+            createDocumentSignature(
+                currentDocument
+            )
+        ) {
+            updateSavedState();
+            return;
+        }
+
+        isApplyingExternalDocument = true;
+
         try {
-            const nextDocument =
-                window.NoteUStorage.loadDocumentFromUrl();
+            currentDocument = nextDocument;
 
-            applyDocument(nextDocument);
+            window.NoteUEditor.setDocument(
+                nextDocument
+            );
 
-            lastSavedSerialization =
-                window.NoteUStorage.serializeDocument(
-                    nextDocument
-                );
+            window.NoteUUI.setDocument(
+                nextDocument
+            );
 
-            lastUrlWarningLevel = "none";
+            updateSavedState();
 
-            window.NoteUUI.showSavedStatus();
-            checkUrlSize();
+            window.NoteUUI.showToast(
+                "Note loaded from link"
+            );
         } catch (error) {
             console.error(
                 "Note-U could not load the document from the current URL.",
@@ -595,28 +568,14 @@ const blockTemplate =
             );
 
             window.NoteUUI.showToast(
-                "Il link non contiene una nota valida",
+                "The note in this link could not be loaded",
                 {
                     type: "error"
                 }
             );
+        } finally {
+            isApplyingExternalDocument = false;
         }
-    }
-
-    /**
-     * Returns the serialized document contained in the current URL.
-     *
-     * @returns {string}
-     */
-    function getCurrentSerializedDocument() {
-        const hash = window.location.hash;
-        const prefix = "#note=";
-
-        if (!hash.startsWith(prefix)) {
-            return "";
-        }
-
-        return hash.slice(prefix.length);
     }
 
     // =========================================================================
@@ -624,41 +583,29 @@ const blockTemplate =
     // =========================================================================
 
     /**
-     * Flushes pending changes before the page closes.
+     * Saves pending changes before the page closes.
      */
     function handleBeforeUnload() {
         if (!saveTimer) {
             return;
         }
 
-        try {
-            saveCurrentDocumentImmediately();
-        } catch (error) {
-            console.error(
-                "Note-U could not complete the final save.",
-                error
-            );
-        }
+        saveCurrentDocument({
+            force: true
+        });
     }
 
     /**
-     * Flushes pending changes when the page becomes hidden.
+     * Saves pending changes when the page becomes hidden.
      */
     function handleVisibilityChange() {
         if (
-            document.visibilityState !== "hidden" ||
-            !saveTimer
+            document.visibilityState === "hidden" &&
+            saveTimer
         ) {
-            return;
-        }
-
-        try {
-            saveCurrentDocumentImmediately();
-        } catch (error) {
-            console.error(
-                "Note-U could not save before the page became hidden.",
-                error
-            );
+            saveCurrentDocument({
+                force: true
+            });
         }
     }
 
@@ -667,94 +614,80 @@ const blockTemplate =
     // =========================================================================
 
     /**
-     * Handles an unrecoverable startup error.
+     * Handles fatal startup errors.
      *
      * @param {*} error
      */
-    function handleFatalError(error) {
+    function handleStartupError(error) {
         console.error(
-            "Note-U encountered a fatal startup error.",
+            "Note-U could not start.",
             error
         );
 
-        const appElement =
+        const app =
             document.getElementById("app");
 
-        if (appElement) {
-            appElement.dataset.loading = "false";
+        if (app) {
+            app.dataset.loading = "false";
         }
 
-        const errorMessage =
-            document.createElement("div");
+        const editor =
+            document.getElementById("editor");
 
-        errorMessage.setAttribute(
-            "role",
-            "alert"
-        );
+        if (editor) {
+            const errorMessage =
+                document.createElement("div");
 
-        errorMessage.style.maxWidth = "680px";
-        errorMessage.style.margin = "80px auto";
-        errorMessage.style.padding = "24px";
-        errorMessage.style.border =
-            "1px solid rgba(197, 65, 65, 0.25)";
-        errorMessage.style.borderRadius = "12px";
-        errorMessage.style.background = "#ffffff";
-        errorMessage.style.color = "#7f2525";
-        errorMessage.style.fontFamily =
-            "system-ui, sans-serif";
-        errorMessage.style.lineHeight = "1.5";
-
-        errorMessage.innerHTML = [
-            "<strong>Note-U non può essere avviato.</strong>",
-            "<br>",
-            "Controlla che tutti i file del progetto siano presenti e ricarica la pagina."
-        ].join("");
-
-        document.body.appendChild(errorMessage);
-    }
-
-    // =========================================================================
-    // Utility helpers
-    // =========================================================================
-
-    /**
-     * Returns the preferred scroll behavior.
-     *
-     * @returns {"auto"|"smooth"}
-     */
-    function getPreferredScrollBehavior() {
-        const reducedMotionQuery =
-            window.matchMedia(
-                "(prefers-reduced-motion: reduce)"
+            errorMessage.setAttribute(
+                "role",
+                "alert"
             );
 
-        return reducedMotionQuery.matches
-            ? "auto"
-            : "smooth";
+            errorMessage.style.padding = "20px";
+            errorMessage.style.border =
+                "1px solid #dfdfdc";
+            errorMessage.style.borderRadius =
+                "10px";
+            errorMessage.style.background =
+                "#ffffff";
+            errorMessage.style.color =
+                "#c64242";
+
+            errorMessage.textContent =
+                "Note-U could not start. Refresh the page or open a new note.";
+
+            editor.replaceChildren(errorMessage);
+        }
     }
 
     // =========================================================================
-    // Public application API
+    // Public API
     // =========================================================================
 
     window.NoteUApp = Object.freeze({
         getDocument() {
-            if (!currentDocument) {
+            if (!isInitialized) {
                 return null;
             }
 
             return window.NoteUStorage.cloneDocument(
-                currentDocument
+                synchronizeApplicationDocument()
             );
         },
 
-        save: saveCurrentDocumentImmediately,
+        save() {
+            return saveCurrentDocument({
+                force: true
+            });
+        },
+
         createNewNote,
-        prepareShareableUrl
+
+        createCurrentDocumentUrl
     });
 
     // =========================================================================
-    // Start
+    // Entry point
     // =========================================================================
 
     if (document.readyState === "loading") {
