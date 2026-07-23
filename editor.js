@@ -1,4698 +1,1631 @@
-/**
- * Note-U
- * Version: 0.3.0
- *
- * Block editor.
- *
- * Responsibilities:
- * - render recursive document blocks;
- * - synchronize editable content with the document model;
- * - support Markdown-style shortcuts;
- * - handle Enter, Backspace, Delete, Tab and Shift+Tab;
- * - support lists, checklists, toggles, quotes and code blocks;
- * - manage slash commands and block menus;
- * - apply inline formatting;
- * - provide a custom right-click context menu;
- * - support mouse drag-and-drop;
- * - preserve caret and text selections when possible.
- */
+(() => {
+  'use strict';
 
-(function () {
-    "use strict";
+  const BLOCK_TYPES = new Set([
+    'paragraph',
+    'heading-1',
+    'heading-2',
+    'heading-3',
+    'bulleted-list',
+    'numbered-list',
+    'checklist',
+    'toggle',
+    'quote',
+    'divider',
+    'code'
+  ]);
 
-    const Storage = window.NoteUStorage;
+  const MAX_INDENT = 8;
+  const URL_PATTERN = /https?:\/\/[^\s<]+/gi;
 
-    if (!Storage) {
-        throw new Error(
-            "NoteUStorage must be loaded before editor.js."
+  function createEditor(options) {
+    const {
+      root,
+      onChange = () => {},
+      onRequestMenu = () => {},
+      onCloseMenu = () => {},
+      onSelectionChange = () => {}
+    } = options || {};
+
+    if (!(root instanceof HTMLElement)) {
+      throw new Error('NoteEditor requires a valid root element.');
+    }
+
+    let savedRange = null;
+    let activeMenuBlock = null;
+    let armedDragBlock = null;
+    let draggedBlock = null;
+    let dragTargetBlock = null;
+    let dragTargetPosition = null;
+    let suppressChange = false;
+    let blockCounter = 0;
+
+    const abortController = new AbortController();
+    const { signal } = abortController;
+
+    function nextBlockId() {
+      blockCounter += 1;
+      return `block-${Date.now().toString(36)}-${blockCounter.toString(36)}`;
+    }
+
+    function normalizeType(type) {
+      return BLOCK_TYPES.has(type) ? type : 'paragraph';
+    }
+
+    function clampIndent(value) {
+      const numericValue = Number.parseInt(value, 10);
+      if (!Number.isFinite(numericValue)) return 0;
+      return Math.max(0, Math.min(MAX_INDENT, numericValue));
+    }
+
+    function cleanHtml(html) {
+      if (typeof html !== 'string' || !html.trim()) return '<br>';
+      return html;
+    }
+
+    function createHandle() {
+      const handle = document.createElement('button');
+      handle.type = 'button';
+      handle.className = 'block-handle';
+      handle.tabIndex = -1;
+      handle.contentEditable = 'false';
+      handle.setAttribute('data-drag-handle', 'true');
+      handle.setAttribute('aria-label', 'Block actions');
+      handle.textContent = '⋮⋮';
+      return handle;
+    }
+
+    function createEditableContent(className = 'block-content', html = '<br>') {
+      const content = document.createElement('div');
+      content.className = className;
+      content.setAttribute('data-block-content', 'true');
+      content.innerHTML = cleanHtml(html);
+      return content;
+    }
+
+    function createBlock(type = 'paragraph', options = {}) {
+      const normalizedType = normalizeType(type);
+      const block = document.createElement('div');
+      block.className = 'block';
+      block.dataset.type = normalizedType;
+      block.dataset.indent = String(clampIndent(options.indent || 0));
+      block.dataset.blockId = options.id || nextBlockId();
+      block.draggable = false;
+
+      const handle = createHandle();
+      const main = document.createElement('div');
+      main.className = 'block-main';
+
+      block.append(handle, main);
+
+      if (normalizedType === 'divider') {
+        const divider = document.createElement('hr');
+        divider.className = 'block-divider';
+        divider.contentEditable = 'false';
+        main.append(divider);
+        return block;
+      }
+
+      if (normalizedType === 'toggle') {
+        block.dataset.open = options.open === false ? 'false' : 'true';
+
+        const row = document.createElement('div');
+        row.className = 'toggle-row';
+
+        const caret = document.createElement('button');
+        caret.type = 'button';
+        caret.className = 'toggle-caret';
+        caret.tabIndex = -1;
+        caret.contentEditable = 'false';
+        caret.setAttribute('data-toggle-caret', 'true');
+        caret.setAttribute('aria-label', 'Toggle content');
+        caret.textContent = '▶';
+
+        const title = createEditableContent(
+          'toggle-title',
+          options.html || options.titleHtml || '<br>'
         );
+        title.dataset.titleStyle = options.titleStyle || 'paragraph';
+
+        const body = document.createElement('div');
+        body.className = 'toggle-body';
+        body.setAttribute('data-toggle-body', 'true');
+
+        if (Array.isArray(options.children)) {
+          options.children.forEach((child) => body.append(child));
+        }
+
+        row.append(caret, title);
+        main.append(row, body);
+        return block;
+      }
+
+      if (normalizedType === 'code') {
+        const pre = document.createElement('pre');
+        pre.className = 'block-content code-content';
+        pre.setAttribute('data-block-content', 'true');
+        pre.textContent = options.text || htmlToPlainText(options.html || '');
+        if (!pre.textContent) pre.append(document.createElement('br'));
+        main.append(pre);
+        return block;
+      }
+
+      const row = document.createElement('div');
+      row.className = 'block-row';
+
+      if (normalizedType === 'bulleted-list' || normalizedType === 'numbered-list') {
+        const marker = document.createElement('span');
+        marker.className = 'list-marker';
+        marker.contentEditable = 'false';
+        marker.setAttribute('aria-hidden', 'true');
+        marker.textContent = normalizedType === 'bulleted-list' ? '•' : '1.';
+        row.append(marker);
+      }
+
+      if (normalizedType === 'checklist') {
+        const marker = document.createElement('label');
+        marker.className = 'check-marker';
+        marker.contentEditable = 'false';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = options.checked === true;
+        checkbox.setAttribute('aria-label', 'Complete item');
+
+        marker.append(checkbox);
+        row.append(marker);
+        block.dataset.checked = checkbox.checked ? 'true' : 'false';
+      }
+
+      row.append(createEditableContent('block-content', options.html || '<br>'));
+      main.append(row);
+      return block;
     }
 
-    // =========================================================================
-    // Block definitions
-    // =========================================================================
-
-    const BLOCK_DEFINITIONS = Object.freeze([
-        {
-            type: "paragraph",
-            title: "Text",
-            description: "Plain text",
-            icon: "T",
-            keywords: ["text", "paragraph", "plain"]
-        },
-        {
-            type: "heading-1",
-            title: "Heading 1",
-            description: "Large section heading",
-            icon: "H1",
-            keywords: ["heading", "title", "h1"]
-        },
-        {
-            type: "heading-2",
-            title: "Heading 2",
-            description: "Medium section heading",
-            icon: "H2",
-            keywords: ["heading", "subtitle", "h2"]
-        },
-        {
-            type: "bullet-list",
-            title: "Bulleted list",
-            description: "Create a simple bulleted list",
-            icon: "•",
-            keywords: ["bullet", "list", "unordered"]
-        },
-        {
-            type: "numbered-list",
-            title: "Numbered list",
-            description: "Create a numbered list",
-            icon: "1.",
-            keywords: ["number", "ordered", "list"]
-        },
-        {
-            type: "checklist",
-            title: "Checklist",
-            description: "Track an item with a checkbox",
-            icon: "☐",
-            keywords: ["todo", "check", "task"]
-        },
-        {
-            type: "toggle",
-            title: "Toggle",
-            description: "Hide content inside a dropdown",
-            icon: "▶",
-            keywords: ["toggle", "dropdown", "collapse"]
-        },
-        {
-            type: "quote",
-            title: "Quote",
-            description: "Highlight a quotation",
-            icon: "❝",
-            keywords: ["quote", "blockquote"]
-        },
-        {
-            type: "code",
-            title: "Code",
-            description: "Write formatted code",
-            icon: "</>",
-            keywords: ["code", "programming", "pre"]
-        },
-        {
-            type: "divider",
-            title: "Divider",
-            description: "Separate sections visually",
-            icon: "—",
-            keywords: ["divider", "line", "separator", "hr"]
-        }
-    ]);
-
-    const BLOCK_DEFINITION_MAP =
-        new Map(
-            BLOCK_DEFINITIONS.map(
-                definition => [
-                    definition.type,
-                    definition
-                ]
-            )
-        );
-
-    const LIST_TYPES = new Set([
-        "bullet-list",
-        "numbered-list",
-        "checklist"
-    ]);
-
-    const TEXT_BLOCK_TYPES = new Set([
-        "paragraph",
-        "heading-1",
-        "heading-2",
-        "bullet-list",
-        "numbered-list",
-        "checklist",
-        "toggle",
-        "quote",
-        "code"
-    ]);
-
-    // =========================================================================
-    // Editor state
-    // =========================================================================
-
-    let editorElement = null;
-    let blockListElement = null;
-    let blockTemplate = null;
-
-    let slashMenuElement = null;
-    let blockMenuElement = null;
-    let blockTypeMenuElement = null;
-    let contextMenuElement = null;
-    let selectionToolbarElement = null;
-    let dropIndicatorElement = null;
-    let dragPreviewElement = null;
-
-    let documentModel = null;
-
-    let changeHandler = function () {};
-    let errorHandler = function () {};
-
-    let activeBlockId = null;
-    let activeMenuBlockId = null;
-
-    let slashState = null;
-    let selectedSlashIndex = 0;
-
-    let savedSelection = null;
-
-    let draggedBlockId = null;
-    let dropTarget = null;
-
-    let isRendering = false;
-    let changeTimer = null;
-
-    // =========================================================================
-    // Initialization
-    // =========================================================================
-
-    /**
-     * Initializes the editor.
-     *
-     * @param {Object} options
-     * @param {Object} options.document
-     * @param {Function} [options.onChange]
-     * @param {Function} [options.onError]
-     * @returns {Object}
-     */
-    function initialize(options) {
-        editorElement =
-            document.getElementById("editor");
-
-        blockListElement =
-            document.getElementById("block-list");
-
-        blockTemplate =
-            document.getElementById("block-template");
-
-        slashMenuElement =
-            document.getElementById("slash-menu");
-
-        blockMenuElement =
-            document.getElementById("block-menu");
-
-        blockTypeMenuElement =
-            document.getElementById("block-type-menu");
-
-        contextMenuElement =
-            document.getElementById("context-menu");
-
-        selectionToolbarElement =
-            document.getElementById("selection-toolbar");
-
-        dropIndicatorElement =
-            document.getElementById("drop-indicator");
-
-        dragPreviewElement =
-            document.getElementById("drag-preview");
-
-        if (
-            !editorElement ||
-            !blockListElement ||
-            !blockTemplate
-        ) {
-            throw new Error(
-                "The editor interface is incomplete."
-            );
-        }
-
-        documentModel =
-            Storage.normalizeDocument(
-                options.document
-            );
-
-        changeHandler =
-            typeof options.onChange === "function"
-                ? options.onChange
-                : function () {};
-
-        errorHandler =
-            typeof options.onError === "function"
-                ? options.onError
-                : function () {};
-
-        bindEditorEvents();
-        bindMenuEvents();
-        bindDocumentEvents();
-
-        render();
-
-        return publicApi;
+    function htmlToPlainText(html) {
+      const template = document.createElement('template');
+      template.innerHTML = html;
+      return template.content.textContent || '';
     }
 
-    // =========================================================================
-    // Rendering
-    // =========================================================================
-
-    /**
-     * Renders the complete block tree.
-     *
-     * @param {Object} [focusRequest]
-     */
-    function render(focusRequest) {
-        isRendering = true;
-
-        closeAllMenus();
-
-        blockListElement.replaceChildren();
-
-        renderBlockCollection(
-            documentModel.blocks,
-            blockListElement
-        );
-
-        refreshListNumbers();
-
-        isRendering = false;
-
-        if (focusRequest) {
-            window.requestAnimationFrame(() => {
-                focusBlock(
-                    focusRequest.blockId,
-                    focusRequest.offset,
-                    focusRequest.position
-                );
-            });
-        }
+    function getContentElement(block) {
+      if (!block) return null;
+      if (block.dataset.type === 'toggle') {
+        return block.querySelector(':scope > .block-main > .toggle-row > .toggle-title');
+      }
+      return block.querySelector(':scope > .block-main [data-block-content]');
     }
 
-    /**
-     * Renders one collection of blocks.
-     *
-     * @param {Array<Object>} blocks
-     * @param {HTMLElement} container
-     */
-    function renderBlockCollection(
-        blocks,
-        container
-    ) {
-        for (const block of blocks) {
-            const blockElement =
-                renderBlock(block);
-
-            container.appendChild(blockElement);
-        }
+    function getToggleBody(block) {
+      if (!block || block.dataset.type !== 'toggle') return null;
+      return block.querySelector(':scope > .block-main > .toggle-body');
     }
 
-    /**
-     * Renders one block.
-     *
-     * @param {Object} block
-     * @returns {HTMLElement}
-     */
-    function renderBlock(block) {
-        const fragment =
-            blockTemplate.content.cloneNode(true);
-
-        const blockElement =
-            fragment.querySelector(".editor-block");
-
-        const contentRow =
-            fragment.querySelector(".block-content-row");
-
-        const prefixElement =
-            fragment.querySelector(".block-prefix");
-
-        const contentElement =
-            fragment.querySelector(".block-content");
-
-        const childrenElement =
-            fragment.querySelector(".block-children");
-
-        blockElement.dataset.blockId =
-            block.id;
-
-        blockElement.dataset.blockType =
-            block.type;
-
-        contentElement.dataset.blockId =
-            block.id;
-
-        contentElement.dataset.placeholder =
-            getPlaceholder(block);
-
-        if (block.type === "divider") {
-            contentElement.remove();
-
-            const divider =
-                document.createElement("div");
-
-            divider.className =
-                "block-divider";
-
-            divider.setAttribute(
-                "role",
-                "separator"
-            );
-
-            contentRow.appendChild(divider);
-        } else {
-            renderRichText(
-                contentElement,
-                block.content
-            );
-        }
-
-        if (block.type === "checklist") {
-            const checkbox =
-                document.createElement("input");
-
-            checkbox.type = "checkbox";
-            checkbox.className =
-                "checklist-checkbox";
-
-            checkbox.checked =
-                Boolean(block.checked);
-
-            checkbox.dataset.action =
-                "toggle-checklist";
-
-            checkbox.setAttribute(
-                "aria-label",
-                "Mark checklist item"
-            );
-
-            contentRow.insertBefore(
-                checkbox,
-                contentElement
-            );
-
-            blockElement.dataset.checked =
-                String(Boolean(block.checked));
-        }
-
-        if (block.type === "toggle") {
-            const toggleButton =
-                document.createElement("button");
-
-            toggleButton.type = "button";
-            toggleButton.className =
-                "toggle-button";
-
-            toggleButton.dataset.action =
-                "toggle-open";
-
-            toggleButton.setAttribute(
-                "aria-label",
-                block.open === false
-                    ? "Open toggle"
-                    : "Close toggle"
-            );
-
-            toggleButton.setAttribute(
-                "aria-expanded",
-                String(block.open !== false)
-            );
-
-            contentRow.insertBefore(
-                toggleButton,
-                contentElement
-            );
-
-            blockElement.dataset.open =
-                String(block.open !== false);
-
-            blockElement.dataset.titleStyle =
-                block.titleStyle ||
-                "paragraph";
-        }
-
-        if (block.type === "numbered-list") {
-            prefixElement.dataset.listNumber =
-                "1";
-        }
-
-        if (
-            Array.isArray(block.children) &&
-            block.children.length > 0
-        ) {
-            childrenElement.hidden = false;
-
-            renderBlockCollection(
-                block.children,
-                childrenElement
-            );
-        } else {
-            childrenElement.hidden =
-                block.type !== "toggle";
-        }
-
-        return blockElement;
+    function getBlockFromNode(node) {
+      const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+      if (!element || !root.contains(element)) return null;
+      return element.closest('.block');
     }
 
-    /**
-     * Renders structured rich text.
-     *
-     * @param {HTMLElement} element
-     * @param {*} content
-     */
-    function renderRichText(element, content) {
-        element.replaceChildren();
-
-        const segments =
-            Storage.normalizeRichText(content);
-
-        for (const segment of segments) {
-            let node =
-                document.createTextNode(
-                    segment.text
-                );
-
-            const marks =
-                Array.isArray(segment.marks)
-                    ? segment.marks
-                    : [];
-
-            for (const mark of marks) {
-                node = wrapNodeWithMark(
-                    node,
-                    mark
-                );
-            }
-
-            element.appendChild(node);
-        }
+    function getTopLevelBlock(block) {
+      let current = block;
+      while (current?.parentElement?.closest('.block')) {
+        current = current.parentElement.closest('.block');
+      }
+      return current;
     }
 
-    /**
-     * Wraps a node in an inline formatting element.
-     *
-     * @param {Node} node
-     * @param {string} mark
-     * @returns {Node}
-     */
-    function wrapNodeWithMark(node, mark) {
-        const tagMap = {
-            bold: "strong",
-            italic: "em",
-            strikethrough: "s",
-            highlight: "mark",
-            code: "code"
-        };
-
-        const tagName =
-            tagMap[mark];
-
-        if (!tagName) {
-            return node;
-        }
-
-        const wrapper =
-            document.createElement(tagName);
-
-        wrapper.appendChild(node);
-
-        return wrapper;
+    function getCurrentBlock() {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return activeMenuBlock;
+      return getBlockFromNode(selection.anchorNode) || activeMenuBlock;
     }
 
-    /**
-     * Returns a contextual placeholder.
-     *
-     * @param {Object} block
-     * @returns {string}
-     */
-    function getPlaceholder(block) {
-        switch (block.type) {
-            case "heading-1":
-                return "Heading 1";
-
-            case "heading-2":
-                return "Heading 2";
-
-            case "toggle":
-                return "Toggle title";
-
-            case "quote":
-                return "Quote";
-
-            case "code":
-                return "Write code";
-
-            default:
-                return 'Type "/" for commands';
-        }
+    function selectionInsideRoot(selection = window.getSelection()) {
+      if (!selection || selection.rangeCount === 0) return false;
+      const range = selection.getRangeAt(0);
+      return root.contains(range.startContainer) && root.contains(range.endContainer);
     }
 
-    // =========================================================================
-    // Rich-text parsing
-    // =========================================================================
-
-    /**
-     * Converts editable DOM content into rich-text segments.
-     *
-     * @param {HTMLElement} element
-     * @returns {Array<Object>}
-     */
-    function parseRichText(element) {
-        const segments = [];
-
-        function visit(node, marks) {
-            if (node.nodeType === Node.TEXT_NODE) {
-                appendSegment(
-                    segments,
-                    node.nodeValue || "",
-                    marks
-                );
-
-                return;
-            }
-
-            if (node.nodeType !== Node.ELEMENT_NODE) {
-                return;
-            }
-
-            if (node.tagName === "BR") {
-                appendSegment(
-                    segments,
-                    "\n",
-                    marks
-                );
-
-                return;
-            }
-
-            const nextMarks =
-                marks.slice();
-
-            const detectedMark =
-                getMarkForElement(node);
-
-            if (
-                detectedMark &&
-                !nextMarks.includes(detectedMark)
-            ) {
-                nextMarks.push(detectedMark);
-            }
-
-            for (const child of node.childNodes) {
-                visit(child, nextMarks);
-            }
-
-            if (
-                ["DIV", "P"].includes(node.tagName) &&
-                node !== element &&
-                node.nextSibling
-            ) {
-                appendSegment(
-                    segments,
-                    "\n",
-                    marks
-                );
-            }
-        }
-
-        for (const child of element.childNodes) {
-            visit(child, []);
-        }
-
-        return Storage.normalizeRichText(
-            segments.length > 0
-                ? segments
-                : [{ text: "" }]
-        );
+    function saveSelection() {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection)) return;
+      savedRange = selection.getRangeAt(0).cloneRange();
     }
 
-    /**
-     * Detects an inline mark from a DOM element.
-     *
-     * @param {Element} element
-     * @returns {string|null}
-     */
-    function getMarkForElement(element) {
-        const tagName =
-            element.tagName.toLowerCase();
-
-        if (
-            tagName === "strong" ||
-            tagName === "b"
-        ) {
-            return "bold";
-        }
-
-        if (
-            tagName === "em" ||
-            tagName === "i"
-        ) {
-            return "italic";
-        }
-
-        if (
-            tagName === "s" ||
-            tagName === "strike" ||
-            tagName === "del"
-        ) {
-            return "strikethrough";
-        }
-
-        if (tagName === "mark") {
-            return "highlight";
-        }
-
-        if (tagName === "code") {
-            return "code";
-        }
-
-        return null;
+    function restoreSelection() {
+      if (!savedRange) return false;
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(savedRange);
+      return true;
     }
 
-    /**
-     * Adds or merges a rich-text segment.
-     *
-     * @param {Array<Object>} segments
-     * @param {string} text
-     * @param {Array<string>} marks
-     */
-    function appendSegment(
-        segments,
-        text,
-        marks
-    ) {
-        if (!text) {
-            return;
-        }
-
-        const normalizedMarks =
-            Storage.normalizeMarks(marks);
-
-        const previous =
-            segments[segments.length - 1];
-
-        if (
-            previous &&
-            haveSameMarks(
-                previous.marks,
-                normalizedMarks
-            )
-        ) {
-            previous.text += text;
-            return;
-        }
-
-        const segment = {
-            text
-        };
-
-        if (normalizedMarks.length > 0) {
-            segment.marks =
-                normalizedMarks;
-        }
-
-        segments.push(segment);
+    function focusAtStart(element) {
+      if (!element) return;
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      element.focus();
+      saveSelection();
     }
 
-    /**
-     * Checks whether two arrays contain the same marks.
-     *
-     * @param {*} first
-     * @param {*} second
-     * @returns {boolean}
-     */
-    function haveSameMarks(first, second) {
-        const firstMarks =
-            Storage.normalizeMarks(first);
-
-        const secondMarks =
-            Storage.normalizeMarks(second);
-
-        return (
-            firstMarks.length ===
-                secondMarks.length &&
-            firstMarks.every(
-                mark =>
-                    secondMarks.includes(mark)
-            )
-        );
+    function focusAtEnd(element) {
+      if (!element) return;
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      element.focus();
+      saveSelection();
     }
 
-    // =========================================================================
-    // Model traversal
-    // =========================================================================
+    function ensureCaretBlock() {
+      let block = getCurrentBlock();
+      if (block && root.contains(block)) return block;
 
-    /**
-     * Finds a block and its surrounding collection.
-     *
-     * @param {string} blockId
-     * @returns {Object|null}
-     */
-    function findBlockLocation(blockId) {
-        function visit(collection, parentBlock) {
-            for (
-                let index = 0;
-                index < collection.length;
-                index += 1
-            ) {
-                const block =
-                    collection[index];
-
-                if (block.id === blockId) {
-                    return {
-                        block,
-                        collection,
-                        index,
-                        parentBlock
-                    };
-                }
-
-                const nested =
-                    visit(
-                        block.children || [],
-                        block
-                    );
-
-                if (nested) {
-                    return nested;
-                }
-            }
-
-            return null;
-        }
-
-        return visit(
-            documentModel.blocks,
-            null
-        );
+      block = root.querySelector('.block');
+      if (!block) {
+        block = createBlock('paragraph');
+        root.append(block);
+      }
+      focusAtStart(getContentElement(block));
+      return block;
     }
 
-    /**
-     * Finds the previous visible block.
-     *
-     * @param {string} blockId
-     * @returns {Object|null}
-     */
-    function findPreviousVisibleBlock(blockId) {
-        const flattened =
-            flattenVisibleBlocks();
-
-        const index =
-            flattened.findIndex(
-                block => block.id === blockId
-            );
-
-        return index > 0
-            ? flattened[index - 1]
-            : null;
+    function isContentEmpty(content) {
+      if (!content) return true;
+      return (content.textContent || '').replace(/\u200B/g, '').trim() === '';
     }
 
-    /**
-     * Finds the next visible block.
-     *
-     * @param {string} blockId
-     * @returns {Object|null}
-     */
-    function findNextVisibleBlock(blockId) {
-        const flattened =
-            flattenVisibleBlocks();
-
-        const index =
-            flattened.findIndex(
-                block => block.id === blockId
-            );
-
-        return (
-            index >= 0 &&
-            index < flattened.length - 1
-        )
-            ? flattened[index + 1]
-            : null;
+    function normalizeEmptyContent(content) {
+      if (!content) return;
+      if (isContentEmpty(content)) content.innerHTML = '<br>';
     }
 
-    /**
-     * Returns all currently visible blocks.
-     *
-     * @returns {Array<Object>}
-     */
-    function flattenVisibleBlocks() {
-        const result = [];
-
-        function visit(collection) {
-            for (const block of collection) {
-                result.push(block);
-
-                if (
-                    block.type !== "toggle" ||
-                    block.open !== false
-                ) {
-                    visit(block.children || []);
-                }
-            }
-        }
-
-        visit(documentModel.blocks);
-
-        return result;
+    function setBlockIndent(block, indent) {
+      if (!block) return;
+      block.dataset.indent = String(clampIndent(indent));
+      refreshNumberedMarkers();
+      emitChange();
     }
 
-    /**
-     * Checks whether one block contains another.
-     *
-     * @param {Object} block
-     * @param {string} targetId
-     * @returns {boolean}
-     */
-    function blockContainsId(block, targetId) {
-        if (block.id === targetId) {
-            return true;
-        }
-
-        return (block.children || []).some(
-            child =>
-                blockContainsId(
-                    child,
-                    targetId
-                )
-        );
+    function indentBlock(block) {
+      setBlockIndent(block, clampIndent(block?.dataset.indent) + 1);
     }
 
-    // =========================================================================
-    // Synchronization
-    // =========================================================================
-
-    /**
-     * Synchronizes one editable block from the DOM.
-     *
-     * @param {HTMLElement} contentElement
-     */
-    function synchronizeContentElement(
-        contentElement
-    ) {
-        const blockId =
-            contentElement.dataset.blockId;
-
-        const location =
-            findBlockLocation(blockId);
-
-        if (!location) {
-            return;
-        }
-
-        location.block.content =
-            parseRichText(contentElement);
-
-        scheduleChange();
+    function outdentBlock(block) {
+      setBlockIndent(block, clampIndent(block?.dataset.indent) - 1);
     }
 
-    /**
-     * Synchronizes every editable block.
-     */
-    function synchronizeAllBlocks() {
-        const contentElements =
-            blockListElement.querySelectorAll(
-                ".block-content[data-block-id]"
-            );
-
-        for (const contentElement of contentElements) {
-            synchronizeContentElement(
-                contentElement
-            );
-        }
+    function insertAfter(referenceBlock, newBlock) {
+      const parent = referenceBlock?.parentElement || root;
+      referenceBlock?.insertAdjacentElement('afterend', newBlock);
+      if (!referenceBlock) parent.append(newBlock);
+      refreshNumberedMarkers();
+      return newBlock;
     }
 
-    /**
-     * Schedules a document change notification.
-     */
-    function scheduleChange() {
-        window.clearTimeout(changeTimer);
-
-        changeTimer =
-            window.setTimeout(() => {
-                changeHandler(
-                    Storage.cloneDocument(
-                        documentModel
-                    )
-                );
-            }, 80);
+    function insertBefore(referenceBlock, newBlock) {
+      if (referenceBlock?.parentElement) {
+        referenceBlock.insertAdjacentElement('beforebegin', newBlock);
+      } else {
+        root.prepend(newBlock);
+      }
+      refreshNumberedMarkers();
+      return newBlock;
     }
 
-    /**
-     * Immediately emits a document change.
-     */
+    function ensureRootHasBlock() {
+      if (!root.querySelector(':scope > .block')) {
+        root.append(createBlock('paragraph'));
+      }
+      updateEmptyState();
+    }
+
+    function updateEmptyState() {
+      const blocks = [...root.querySelectorAll(':scope > .block')];
+      const empty = blocks.length === 1
+        && blocks[0].dataset.type === 'paragraph'
+        && isContentEmpty(getContentElement(blocks[0]));
+      root.classList.toggle('is-empty', empty);
+    }
+
     function emitChange() {
-        window.clearTimeout(changeTimer);
-
-        changeHandler(
-            Storage.cloneDocument(
-                documentModel
-            )
-        );
+      if (suppressChange) return;
+      updateEmptyState();
+      refreshNumberedMarkers();
+      onChange(serialize());
     }
 
-    // =========================================================================
-    // Event binding
-    // =========================================================================
-
-    /**
-     * Binds editor events.
-     */
-    function bindEditorEvents() {
-        blockListElement.addEventListener(
-            "input",
-            handleEditorInput
-        );
-
-        blockListElement.addEventListener(
-            "keydown",
-            handleEditorKeyDown
-        );
-
-        blockListElement.addEventListener(
-            "click",
-            handleEditorClick
-        );
-
-        blockListElement.addEventListener(
-            "change",
-            handleEditorChange
-        );
-
-        blockListElement.addEventListener(
-            "contextmenu",
-            handleEditorContextMenu
-        );
-
-        blockListElement.addEventListener(
-            "focusin",
-            handleEditorFocusIn
-        );
-
-        blockListElement.addEventListener(
-            "paste",
-            handleEditorPaste
-        );
-
-        blockListElement.addEventListener(
-            "dragstart",
-            handleDragStart
-        );
-
-        blockListElement.addEventListener(
-            "dragover",
-            handleDragOver
-        );
-
-        blockListElement.addEventListener(
-            "drop",
-            handleDrop
-        );
-
-        blockListElement.addEventListener(
-            "dragend",
-            handleDragEnd
-        );
+    function createContentsRange(node) {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return range;
     }
 
-    /**
-     * Binds menu events.
-     */
-    function bindMenuEvents() {
-        const menuElements = [
-            slashMenuElement,
-            blockMenuElement,
-            blockTypeMenuElement,
-            contextMenuElement,
-            selectionToolbarElement
-        ];
-
-        for (const menu of menuElements) {
-            if (!menu) {
-                continue;
-            }
-
-            menu.addEventListener(
-                "pointerdown",
-                event => {
-                    event.preventDefault();
-                }
-            );
-        }
-
-        slashMenuElement?.addEventListener(
-            "click",
-            handleSlashMenuClick
-        );
-
-        blockMenuElement?.addEventListener(
-            "click",
-            handleBlockMenuClick
-        );
-
-        blockTypeMenuElement?.addEventListener(
-            "click",
-            handleBlockTypeMenuClick
-        );
-
-        contextMenuElement?.addEventListener(
-            "click",
-            handleContextMenuClick
-        );
-
-        selectionToolbarElement?.addEventListener(
-            "click",
-            handleSelectionToolbarClick
-        );
-    }
-
-    /**
-     * Binds global document events.
-     */
-    function bindDocumentEvents() {
-        document.addEventListener(
-            "pointerdown",
-            event => {
-                if (
-                    !event.target.closest(".popover") &&
-                    !event.target.closest(
-                        ".selection-toolbar"
-                    ) &&
-                    !event.target.closest(
-                        ".block-handle"
-                    )
-                ) {
-                    closeAllMenus();
-                }
-            }
-        );
-
-        document.addEventListener(
-            "selectionchange",
-            handleSelectionChange
-        );
-
-        window.addEventListener(
-            "resize",
-            closeAllMenus
-        );
-
-        window.addEventListener(
-            "scroll",
-            closeAllMenus,
-            true
-        );
-    }
-
-    // =========================================================================
-    // Input handling
-    // =========================================================================
-
-    /**
-     * Handles normal editor input.
-     *
-     * @param {InputEvent} event
-     */
-    function handleEditorInput(event) {
-        const contentElement =
-            event.target.closest(
-                ".block-content"
-            );
-
-        if (!contentElement) {
-            return;
-        }
-
-        synchronizeContentElement(
-            contentElement
-        );
-
-        detectSlashCommand(
-            contentElement
-        );
-    }
-
-    /**
-     * Handles editor keyboard behavior.
-     *
-     * @param {KeyboardEvent} event
-     */
-    function handleEditorKeyDown(event) {
-        const contentElement =
-            event.target.closest(
-                ".block-content"
-            );
-
-        if (!contentElement) {
-            return;
-        }
-
-        const blockId =
-            contentElement.dataset.blockId;
-
-        activeBlockId = blockId;
-
-        if (
-            slashState &&
-            slashState.blockId === blockId
-        ) {
-            if (
-                handleSlashMenuKeyboard(
-                    event
-                )
-            ) {
-                return;
-            }
-        }
-
-        if (handleFormattingShortcut(event)) {
-            return;
-        }
-
-        if (
-            event.altKey &&
-            event.key === "ArrowUp"
-        ) {
-            event.preventDefault();
-            moveBlock(blockId, -1);
-            return;
-        }
-
-        if (
-            event.altKey &&
-            event.key === "ArrowDown"
-        ) {
-            event.preventDefault();
-            moveBlock(blockId, 1);
-            return;
-        }
-
-        if (event.key === "Tab") {
-            event.preventDefault();
-
-            if (event.shiftKey) {
-                outdentBlock(blockId);
-            } else {
-                indentBlock(blockId);
-            }
-
-            return;
-        }
-
-        if (event.key === "Enter") {
-            handleEnterKey(
-                event,
-                contentElement
-            );
-
-            return;
-        }
-
-        if (
-            event.key === "Backspace" &&
-            handleBackspaceKey(
-                event,
-                contentElement
-            )
-        ) {
-            return;
-        }
-
-        if (
-            event.key === "Delete" &&
-            handleDeleteKey(
-                event,
-                contentElement
-            )
-        ) {
-            return;
-        }
-
-        if (
-            event.key === " " &&
-            !event.ctrlKey &&
-            !event.metaKey &&
-            !event.altKey
-        ) {
-            handleMarkdownSpaceShortcut(
-                event,
-                contentElement
-            );
-        }
-    }
-
-    // =========================================================================
-    // Markdown shortcuts
-    // =========================================================================
-
-    /**
-     * Handles shortcuts completed by pressing Space.
-     *
-     * @param {KeyboardEvent} event
-     * @param {HTMLElement} contentElement
-     */
-    function handleMarkdownSpaceShortcut(
-        event,
-        contentElement
-    ) {
-        const caretOffset =
-            getCaretOffset(contentElement);
-
-        const plainText =
-            contentElement.textContent || "";
-
-        const textBeforeCaret =
-            plainText.slice(0, caretOffset);
-
-        const shortcutMap = {
-            "-": "bullet-list",
-            "*": "bullet-list",
-            "1.": "numbered-list",
-            "[]": "checklist",
-            "[ ]": "checklist",
-            ">": "toggle",
-            "#": "heading-1",
-            "##": "heading-2",
-            "```": "code",
-            "---": "divider"
-        };
-
-        const targetType =
-            shortcutMap[textBeforeCaret];
-
-        if (!targetType) {
-            return;
-        }
-
-        event.preventDefault();
-
-        const blockId =
-            contentElement.dataset.blockId;
-
-        const location =
-            findBlockLocation(blockId);
-
-        if (!location) {
-            return;
-        }
-
-        location.block.type =
-            targetType;
-
-        location.block.content =
-            Storage.normalizeRichText(
-                plainText.slice(caretOffset)
-            );
-
-        applyTypeDefaults(
-            location.block,
-            targetType
-        );
-
-        if (targetType === "divider") {
-            const paragraph =
-                Storage.createDefaultBlock(
-                    "paragraph"
-                );
-
-            location.collection.splice(
-                location.index + 1,
-                0,
-                paragraph
-            );
-
-            render({
-                blockId: paragraph.id,
-                position: "start"
-            });
-        } else {
-            render({
-                blockId,
-                position: "start"
-            });
-        }
-
-        emitChange();
-    }
-
-    /**
-     * Detects slash commands in the current block.
-     *
-     * @param {HTMLElement} contentElement
-     */
-    function detectSlashCommand(contentElement) {
-        const blockId =
-            contentElement.dataset.blockId;
-
-        const caretOffset =
-            getCaretOffset(contentElement);
-
-        const text =
-            contentElement.textContent || "";
-
-        const beforeCaret =
-            text.slice(0, caretOffset);
-
-        const slashIndex =
-            beforeCaret.lastIndexOf("/");
-
-        if (
-            slashIndex < 0 ||
-            (
-                slashIndex > 0 &&
-                !/\s/.test(
-                    beforeCaret[
-                        slashIndex - 1
-                    ]
-                )
-            )
-        ) {
-            closeSlashMenu();
-            return;
-        }
-
-        const query =
-            beforeCaret.slice(
-                slashIndex + 1
-            );
-
-        if (/\s/.test(query)) {
-            closeSlashMenu();
-            return;
-        }
-
-        slashState = {
-            blockId,
-            slashIndex,
-            caretOffset,
-            query
-        };
-
-        selectedSlashIndex = 0;
-
-        renderSlashMenu(query);
-
-        positionMenuNearCaret(
-            slashMenuElement
-        );
-    }
-
-    // =========================================================================
-    // Enter behavior
-    // =========================================================================
-
-    /**
-     * Handles Enter and Shift+Enter.
-     *
-     * @param {KeyboardEvent} event
-     * @param {HTMLElement} contentElement
-     */
-    function handleEnterKey(
-        event,
-        contentElement
-    ) {
-        if (event.shiftKey) {
-            return;
-        }
-
-        event.preventDefault();
-
-        synchronizeContentElement(
-            contentElement
-        );
-
-        const blockId =
-            contentElement.dataset.blockId;
-
-        const location =
-            findBlockLocation(blockId);
-
-        if (!location) {
-            return;
-        }
-
-        const block =
-            location.block;
-
-        const plainText =
-            Storage.richTextToPlainText(
-                block.content
-            );
-
-        if (
-            LIST_TYPES.has(block.type) &&
-            plainText.trim() === ""
-        ) {
-            exitListBlock(location);
-            return;
-        }
-
-        if (
-            block.type === "toggle" &&
-            plainText.trim() === ""
-        ) {
-            block.type = "paragraph";
-            delete block.open;
-            delete block.titleStyle;
-
-            render({
-                blockId,
-                position: "start"
-            });
-
-            emitChange();
-            return;
-        }
-
-        if (block.type === "divider") {
-            insertBlockAfter(
-                blockId,
-                "paragraph",
-                ""
-            );
-
-            return;
-        }
-
-        splitBlockAtCaret(
-            location,
-            contentElement
-        );
-    }
-
-    /**
-     * Splits a block at the current caret position.
-     *
-     * @param {Object} location
-     * @param {HTMLElement} contentElement
-     */
-    function splitBlockAtCaret(
-        location,
-        contentElement
-    ) {
-        const caretOffset =
-            getCaretOffset(contentElement);
-
-        const segments =
-            splitRichTextAtOffset(
-                location.block.content,
-                caretOffset
-            );
-
-        location.block.content =
-            segments.before;
-
-        let newType =
-            location.block.type;
-
-        if (
-            newType === "heading-1" ||
-            newType === "heading-2" ||
-            newType === "quote"
-        ) {
-            newType = "paragraph";
-        }
-
-        if (newType === "toggle") {
-            const child =
-                Storage.createDefaultBlock(
-                    "paragraph",
-                    Storage.richTextToPlainText(
-                        segments.after
-                    )
-                );
-
-            child.content =
-                segments.after;
-
-            location.block.children.unshift(
-                child
-            );
-
-            location.block.open = true;
-
-            render({
-                blockId: child.id,
-                position: "start"
-            });
-
-            emitChange();
-            return;
-        }
-
-        const newBlock =
-            Storage.createDefaultBlock(
-                newType
-            );
-
-        newBlock.content =
-            segments.after;
-
-        if (
-            newType === "checklist"
-        ) {
-            newBlock.checked = false;
-        }
-
-        location.collection.splice(
-            location.index + 1,
-            0,
-            newBlock
-        );
-
-        render({
-            blockId: newBlock.id,
-            position: "start"
-        });
-
-        emitChange();
-    }
-
-    /**
-     * Converts an empty list item back to text.
-     *
-     * @param {Object} location
-     */
-    function exitListBlock(location) {
-        location.block.type =
-            "paragraph";
-
-        delete location.block.checked;
-
-        render({
-            blockId: location.block.id,
-            position: "start"
-        });
-
-        emitChange();
-    }
-
-    // =========================================================================
-    // Backspace and Delete
-    // =========================================================================
-
-    /**
-     * Handles Backspace at the beginning of a block.
-     *
-     * @param {KeyboardEvent} event
-     * @param {HTMLElement} contentElement
-     * @returns {boolean}
-     */
-    function handleBackspaceKey(
-        event,
-        contentElement
-    ) {
-        if (
-            !isSelectionCollapsed() ||
-            getCaretOffset(contentElement) !== 0
-        ) {
-            return false;
-        }
-
-        const blockId =
-            contentElement.dataset.blockId;
-
-        const location =
-            findBlockLocation(blockId);
-
-        if (!location) {
-            return false;
-        }
-
-        if (
-            location.block.type !==
-            "paragraph"
-        ) {
-            event.preventDefault();
-
-            location.block.type =
-                "paragraph";
-
-            delete location.block.checked;
-            delete location.block.open;
-            delete location.block.titleStyle;
-
-            render({
-                blockId,
-                position: "start"
-            });
-
-            emitChange();
-
-            return true;
-        }
-
-        const previousBlock =
-            findPreviousVisibleBlock(
-                blockId
-            );
-
-        if (!previousBlock) {
-            return false;
-        }
-
-        event.preventDefault();
-
-        mergeBlocks(
-            previousBlock.id,
-            blockId
-        );
-
-        return true;
-    }
-
-    /**
-     * Handles Delete at the end of a block.
-     *
-     * @param {KeyboardEvent} event
-     * @param {HTMLElement} contentElement
-     * @returns {boolean}
-     */
-    function handleDeleteKey(
-        event,
-        contentElement
-    ) {
-        if (
-            !isSelectionCollapsed() ||
-            getCaretOffset(contentElement) !==
-                getContentTextLength(
-                    contentElement
-                )
-        ) {
-            return false;
-        }
-
-        const currentBlockId =
-            contentElement.dataset.blockId;
-
-        const nextBlock =
-            findNextVisibleBlock(
-                currentBlockId
-            );
-
-        if (!nextBlock) {
-            return false;
-        }
-
-        event.preventDefault();
-
-        mergeBlocks(
-            currentBlockId,
-            nextBlock.id
-        );
-
-        return true;
-    }
-
-    /**
-     * Merges a source block into a target block.
-     *
-     * @param {string} targetId
-     * @param {string} sourceId
-     */
-    function mergeBlocks(targetId, sourceId) {
-        const targetLocation =
-            findBlockLocation(targetId);
-
-        const sourceLocation =
-            findBlockLocation(sourceId);
-
-        if (
-            !targetLocation ||
-            !sourceLocation ||
-            targetId === sourceId
-        ) {
-            return;
-        }
-
-        if (
-            targetLocation.block.type ===
-            "divider"
-        ) {
-            targetLocation.block.type =
-                "paragraph";
-
-            targetLocation.block.content =
-                Storage.normalizeRichText("");
-        }
-
-        const targetLength =
-            Storage.richTextToPlainText(
-                targetLocation.block.content
-            ).length;
-
-        targetLocation.block.content =
-            concatenateRichText(
-                targetLocation.block.content,
-                sourceLocation.block.content
-            );
-
-        targetLocation.block.children.push(
-            ...sourceLocation.block.children
-        );
-
-        sourceLocation.collection.splice(
-            sourceLocation.index,
-            1
-        );
-
-        ensureDocumentHasBlock();
-
-        render({
-            blockId: targetId,
-            offset: targetLength
-        });
-
-        emitChange();
-    }
-
-    // =========================================================================
-    // Block actions
-    // =========================================================================
-
-    /**
-     * Changes a block type.
-     *
-     * @param {string} blockId
-     * @param {string} targetType
-     */
-    function changeBlockType(
-        blockId,
-        targetType
-    ) {
-        const location =
-            findBlockLocation(blockId);
-
-        if (
-            !location ||
-            !BLOCK_DEFINITION_MAP.has(
-                targetType
-            )
-        ) {
-            return;
-        }
-
-        const oldType =
-            location.block.type;
-
-        location.block.type =
-            targetType;
-
-        if (targetType === "divider") {
-            location.block.content = [];
-        } else if (oldType === "divider") {
-            location.block.content =
-                Storage.normalizeRichText("");
-        }
-
-        applyTypeDefaults(
-            location.block,
-            targetType
-        );
-
-        if (targetType === "divider") {
-            const nextBlock =
-                Storage.createDefaultBlock(
-                    "paragraph"
-                );
-
-            location.collection.splice(
-                location.index + 1,
-                0,
-                nextBlock
-            );
-
-            render({
-                blockId: nextBlock.id,
-                position: "start"
-            });
-        } else {
-            render({
-                blockId,
-                position: "end"
-            });
-        }
-
-        emitChange();
-    }
-
-    /**
-     * Applies type-specific fields.
-     *
-     * @param {Object} block
-     * @param {string} type
-     */
-    function applyTypeDefaults(block, type) {
-        if (type === "checklist") {
-            block.checked =
-                Boolean(block.checked);
-        } else {
-            delete block.checked;
-        }
-
-        if (type === "toggle") {
-            block.open =
-                block.open !== false;
-
-            block.titleStyle =
-                Storage
-                    .SUPPORTED_TOGGLE_TITLE_STYLES
-                    .includes(block.titleStyle)
-                    ? block.titleStyle
-                    : "paragraph";
-        } else {
-            delete block.open;
-            delete block.titleStyle;
-        }
-    }
-
-    /**
-     * Inserts a block after another block.
-     *
-     * @param {string} blockId
-     * @param {string} type
-     * @param {*} content
-     */
-    function insertBlockAfter(
-        blockId,
-        type = "paragraph",
-        content = ""
-    ) {
-        const location =
-            findBlockLocation(blockId);
-
-        if (!location) {
-            return;
-        }
-
-        const newBlock =
-            Storage.createDefaultBlock(
-                type,
-                content
-            );
-
-        location.collection.splice(
-            location.index + 1,
-            0,
-            newBlock
-        );
-
-        render({
-            blockId: newBlock.id,
-            position: "start"
-        });
-
-        emitChange();
-    }
-
-    /**
-     * Appends a block at the end of the document.
-     *
-     * @param {string} [type]
-     */
-    function appendBlock(type = "paragraph") {
-        const block =
-            Storage.createDefaultBlock(type);
-
-        documentModel.blocks.push(block);
-
-        render({
-            blockId: block.id,
-            position: "start"
-        });
-
-        emitChange();
-    }
-
-    /**
-     * Duplicates a block and its descendants.
-     *
-     * @param {string} blockId
-     */
-    function duplicateBlock(blockId) {
-        const location =
-            findBlockLocation(blockId);
-
-        if (!location) {
-            return;
-        }
-
-        const clone =
-            cloneBlockWithNewIds(
-                location.block
-            );
-
-        location.collection.splice(
-            location.index + 1,
-            0,
-            clone
-        );
-
-        render({
-            blockId: clone.id,
-            position: "end"
-        });
-
-        emitChange();
-    }
-
-    /**
-     * Clones a recursive block tree with new identifiers.
-     *
-     * @param {Object} block
-     * @returns {Object}
-     */
-    function cloneBlockWithNewIds(block) {
-        const clone =
-            Storage.normalizeBlock(
-                JSON.parse(
-                    JSON.stringify(block)
-                )
-            );
-
-        function replaceIds(item) {
-            item.id =
-                Storage.createId();
-
-            for (const child of item.children) {
-                replaceIds(child);
-            }
-        }
-
-        replaceIds(clone);
-
-        return clone;
-    }
-
-    /**
-     * Deletes a block.
-     *
-     * @param {string} blockId
-     */
-    function deleteBlock(blockId) {
-        const location =
-            findBlockLocation(blockId);
-
-        if (!location) {
-            return;
-        }
-
-        let focusTarget = null;
-
-        if (location.index > 0) {
-            focusTarget =
-                location.collection[
-                    location.index - 1
-                ];
-        } else {
-            focusTarget =
-                location.collection[
-                    location.index + 1
-                ] || null;
-        }
-
-        location.collection.splice(
-            location.index,
-            1
-        );
-
-        ensureDocumentHasBlock();
-
-        render({
-            blockId:
-                focusTarget?.id ||
-                documentModel.blocks[0].id,
-            position: "end"
-        });
-
-        emitChange();
-    }
-
-    /**
-     * Moves a block within its current collection.
-     *
-     * @param {string} blockId
-     * @param {number} direction
-     */
-    function moveBlock(blockId, direction) {
-        const location =
-            findBlockLocation(blockId);
-
-        if (!location) {
-            return;
-        }
-
-        const targetIndex =
-            location.index + direction;
-
-        if (
-            targetIndex < 0 ||
-            targetIndex >=
-                location.collection.length
-        ) {
-            return;
-        }
-
-        const [block] =
-            location.collection.splice(
-                location.index,
-                1
-            );
-
-        location.collection.splice(
-            targetIndex,
-            0,
-            block
-        );
-
-        render({
-            blockId,
-            position: "end"
-        });
-
-        emitChange();
-    }
-
-    /**
-     * Indents a block under its previous sibling.
-     *
-     * @param {string} blockId
-     */
-    function indentBlock(blockId) {
-        const location =
-            findBlockLocation(blockId);
-
-        if (
-            !location ||
-            location.index === 0
-        ) {
-            return;
-        }
-
-        const previousSibling =
-            location.collection[
-                location.index - 1
-            ];
-
-        const [block] =
-            location.collection.splice(
-                location.index,
-                1
-            );
-
-        previousSibling.children.push(block);
-
-        if (
-            previousSibling.type === "toggle"
-        ) {
-            previousSibling.open = true;
-        }
-
-        render({
-            blockId,
-            position: "end"
-        });
-
-        emitChange();
-    }
-
-    /**
-     * Outdents a block from its parent.
-     *
-     * @param {string} blockId
-     */
-    function outdentBlock(blockId) {
-        const location =
-            findBlockLocation(blockId);
-
-        if (
-            !location ||
-            !location.parentBlock
-        ) {
-            return;
-        }
-
-        const parentLocation =
-            findBlockLocation(
-                location.parentBlock.id
-            );
-
-        if (!parentLocation) {
-            return;
-        }
-
-        const [block] =
-            location.collection.splice(
-                location.index,
-                1
-            );
-
-        parentLocation.collection.splice(
-            parentLocation.index + 1,
-            0,
-            block
-        );
-
-        render({
-            blockId,
-            position: "end"
-        });
-
-        emitChange();
-    }
-
-    /**
-     * Ensures that the document always contains one block.
-     */
-    function ensureDocumentHasBlock() {
-        if (documentModel.blocks.length === 0) {
-            documentModel.blocks.push(
-                Storage.createDefaultBlock()
-            );
-        }
-    }
-
-    // =========================================================================
-    // Toggle behavior
-    // =========================================================================
-
-    /**
-     * Opens or closes a toggle.
-     *
-     * @param {string} blockId
-     */
-    function toggleBlockOpen(blockId) {
-        const location =
-            findBlockLocation(blockId);
-
-        if (
-            !location ||
-            location.block.type !== "toggle"
-        ) {
-            return;
-        }
-
-        location.block.open =
-            location.block.open === false;
-
-        const blockElement =
-            getBlockElement(blockId);
-
-        if (blockElement) {
-            blockElement.dataset.open =
-                String(location.block.open);
-
-            const button =
-                blockElement.querySelector(
-                    ":scope > .editor-block__body .toggle-button"
-                );
-
-            button?.setAttribute(
-                "aria-expanded",
-                String(location.block.open)
-            );
-
-            button?.setAttribute(
-                "aria-label",
-                location.block.open
-                    ? "Close toggle"
-                    : "Open toggle"
-            );
-        }
-
-        emitChange();
-    }
-
-    /**
-     * Changes a toggle title style.
-     *
-     * @param {string} blockId
-     * @param {string} titleStyle
-     */
-    function changeToggleTitleStyle(
-        blockId,
-        titleStyle
-    ) {
-        const location =
-            findBlockLocation(blockId);
-
-        if (
-            !location ||
-            location.block.type !== "toggle" ||
-            !Storage
-                .SUPPORTED_TOGGLE_TITLE_STYLES
-                .includes(titleStyle)
-        ) {
-            return;
-        }
-
-        location.block.titleStyle =
-            titleStyle;
-
-        render({
-            blockId,
-            position: "end"
-        });
-
-        emitChange();
-    }
-
-    // =========================================================================
-    // Click and change events
-    // =========================================================================
-
-    /**
-     * Handles editor clicks.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleEditorClick(event) {
-        const actionElement =
-            event.target.closest(
-                "[data-action]"
-            );
-
-        if (!actionElement) {
-            return;
-        }
-
-        const blockElement =
-            actionElement.closest(
-                ".editor-block"
-            );
-
-        const blockId =
-            blockElement?.dataset.blockId;
-
-        if (!blockId) {
-            return;
-        }
-
-        const action =
-            actionElement.dataset.action;
-
-        if (
-            action ===
-            "open-block-menu"
-        ) {
-            event.preventDefault();
-
-            openBlockMenu(
-                blockId,
-                actionElement
-            );
-        }
-
-        if (action === "toggle-open") {
-            event.preventDefault();
-
-            toggleBlockOpen(blockId);
-        }
-    }
-
-    /**
-     * Handles checklist changes.
-     *
-     * @param {Event} event
-     */
-    function handleEditorChange(event) {
-        const checkbox =
-            event.target.closest(
-                ".checklist-checkbox"
-            );
-
-        if (!checkbox) {
-            return;
-        }
-
-        const blockElement =
-            checkbox.closest(
-                ".editor-block"
-            );
-
-        const blockId =
-            blockElement?.dataset.blockId;
-
-        const location =
-            findBlockLocation(blockId);
-
-        if (!location) {
-            return;
-        }
-
-        location.block.checked =
-            checkbox.checked;
-
-        blockElement.dataset.checked =
-            String(checkbox.checked);
-
-        emitChange();
-    }
-
-    /**
-     * Tracks the focused block.
-     *
-     * @param {FocusEvent} event
-     */
-    function handleEditorFocusIn(event) {
-        const contentElement =
-            event.target.closest(
-                ".block-content"
-            );
-
-        if (contentElement) {
-            activeBlockId =
-                contentElement.dataset.blockId;
-        }
-    }
-
-    // =========================================================================
-    // Paste handling
-    // =========================================================================
-
-    /**
-     * Handles multiline plain-text paste.
-     *
-     * @param {ClipboardEvent} event
-     */
-    function handleEditorPaste(event) {
-        const contentElement =
-            event.target.closest(
-                ".block-content"
-            );
-
-        if (!contentElement) {
-            return;
-        }
-
-        const plainText =
-            event.clipboardData?.getData(
-                "text/plain"
-            );
-
-        if (
-            !plainText ||
-            !plainText.includes("\n")
-        ) {
-            return;
-        }
-
-        event.preventDefault();
-
-        const normalized =
-            plainText.replace(
-                /\r\n?/g,
-                "\n"
-            );
-
-        const lines =
-            normalized.split("\n");
-
-        const blockId =
-            contentElement.dataset.blockId;
-
-        const location =
-            findBlockLocation(blockId);
-
-        if (!location) {
-            return;
-        }
-
-        const caretOffset =
-            getCaretOffset(contentElement);
-
-        const split =
-            splitRichTextAtOffset(
-                location.block.content,
-                caretOffset
-            );
-
-        location.block.content =
-            concatenateRichText(
-                split.before,
-                Storage.normalizeRichText(
-                    lines[0]
-                )
-            );
-
-        const insertedBlocks = [];
-
-        for (
-            let index = 1;
-            index < lines.length;
-            index += 1
-        ) {
-            const content =
-                index === lines.length - 1
-                    ? concatenateRichText(
-                        Storage.normalizeRichText(
-                            lines[index]
-                        ),
-                        split.after
-                    )
-                    : Storage.normalizeRichText(
-                        lines[index]
-                    );
-
-            const block =
-                Storage.createDefaultBlock(
-                    "paragraph"
-                );
-
-            block.content = content;
-
-            insertedBlocks.push(block);
-        }
-
-        location.collection.splice(
-            location.index + 1,
-            0,
-            ...insertedBlocks
-        );
-
-        const focusBlockId =
-            insertedBlocks.length > 0
-                ? insertedBlocks[
-                    insertedBlocks.length - 1
-                ].id
-                : blockId;
-
-        render({
-            blockId: focusBlockId,
-            position: "end"
-        });
-
-        emitChange();
-    }
-
-    // =========================================================================
-    // Slash menu
-    // =========================================================================
-
-    /**
-     * Renders slash command results.
-     *
-     * @param {string} query
-     */
-    function renderSlashMenu(query) {
-        const normalizedQuery =
-            query.trim().toLowerCase();
-
-        const definitions =
-            BLOCK_DEFINITIONS.filter(
-                definition => {
-                    const haystack = [
-                        definition.title,
-                        definition.description,
-                        ...definition.keywords
-                    ]
-                        .join(" ")
-                        .toLowerCase();
-
-                    return haystack.includes(
-                        normalizedQuery
-                    );
-                }
-            );
-
-        slashMenuElement.replaceChildren();
-
-        const label =
-            document.createElement("div");
-
-        label.className =
-            "slash-menu__label";
-
-        label.textContent =
-            definitions.length > 0
-                ? "Blocks"
-                : "No results";
-
-        slashMenuElement.appendChild(label);
-
-        definitions.forEach(
-            (definition, index) => {
-                slashMenuElement.appendChild(
-                    createBlockTypeMenuItem(
-                        definition,
-                        index ===
-                            selectedSlashIndex,
-                        "slash"
-                    )
-                );
-            }
-        );
-
-        slashMenuElement.hidden = false;
-    }
-
-    /**
-     * Handles slash menu keyboard navigation.
-     *
-     * @param {KeyboardEvent} event
-     * @returns {boolean}
-     */
-    function handleSlashMenuKeyboard(event) {
-        const items =
-            slashMenuElement.querySelectorAll(
-                "[data-block-type]"
-            );
-
-        if (event.key === "ArrowDown") {
-            event.preventDefault();
-
-            selectedSlashIndex =
-                Math.min(
-                    selectedSlashIndex + 1,
-                    items.length - 1
-                );
-
-            updateSlashSelection();
-
-            return true;
-        }
-
-        if (event.key === "ArrowUp") {
-            event.preventDefault();
-
-            selectedSlashIndex =
-                Math.max(
-                    selectedSlashIndex - 1,
-                    0
-                );
-
-            updateSlashSelection();
-
-            return true;
-        }
-
-        if (
-            event.key === "Enter" &&
-            items.length > 0
-        ) {
-            event.preventDefault();
-
-            const selected =
-                items[selectedSlashIndex];
-
-            applySlashCommand(
-                selected.dataset.blockType
-            );
-
-            return true;
-        }
-
-        if (event.key === "Escape") {
-            event.preventDefault();
-            closeSlashMenu();
-            return true;
-        }
-
+    function rangesEqual(first, second) {
+      try {
+        return first.compareBoundaryPoints(Range.START_TO_START, second) === 0
+          && first.compareBoundaryPoints(Range.END_TO_END, second) === 0;
+      } catch {
         return false;
+      }
     }
 
-    /**
-     * Updates the highlighted slash item.
-     */
-    function updateSlashSelection() {
-        const items =
-            slashMenuElement.querySelectorAll(
-                "[data-block-type]"
-            );
-
-        items.forEach((item, index) => {
-            const selected =
-                index === selectedSlashIndex;
-
-            item.classList.toggle(
-                "slash-menu-item--active",
-                selected
-            );
-
-            item.setAttribute(
-                "aria-selected",
-                String(selected)
-            );
-
-            if (selected) {
-                item.scrollIntoView({
-                    block: "nearest"
-                });
-            }
-        });
+    function selectionMatchesNodeContents(selection, node) {
+      if (!selection || selection.rangeCount !== 1 || !node) return false;
+      return rangesEqual(selection.getRangeAt(0), createContentsRange(node));
     }
 
-    /**
-     * Handles slash menu clicks.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleSlashMenuClick(event) {
-        const item =
-            event.target.closest(
-                "[data-block-type]"
-            );
-
-        if (!item) {
-            return;
-        }
-
-        applySlashCommand(
-            item.dataset.blockType
-        );
+    function selectNodeContents(node) {
+      const selection = window.getSelection();
+      const range = createContentsRange(node);
+      selection.removeAllRanges();
+      selection.addRange(range);
     }
 
-    /**
-     * Applies a slash command and removes the typed query.
-     *
-     * @param {string} targetType
-     */
-    function applySlashCommand(targetType) {
-        if (!slashState) {
-            return;
-        }
+    function handleSelectAll(event) {
+      const isSelectAll = (event.ctrlKey || event.metaKey)
+        && !event.altKey
+        && event.key.toLowerCase() === 'a';
 
-        const location =
-            findBlockLocation(
-                slashState.blockId
-            );
+      if (!isSelectAll) return false;
 
-        if (!location) {
-            closeSlashMenu();
-            return;
-        }
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.repeat) return true;
 
-        const fullText =
-            Storage.richTextToPlainText(
-                location.block.content
-            );
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection)) {
+        root.focus();
+        selectNodeContents(root);
+        return true;
+      }
 
-        const textBeforeCommand =
-            fullText.slice(
-                0,
-                slashState.slashIndex
-            );
+      if (selectionMatchesNodeContents(selection, root)) return true;
 
-        const textAfterCommand =
-            fullText.slice(
-                slashState.caretOffset
-            );
+      const block = getBlockFromNode(selection.anchorNode);
+      const content = getContentElement(block);
+      if (!content) {
+        selectNodeContents(root);
+        return true;
+      }
 
-        location.block.content =
-            Storage.normalizeRichText(
-                textBeforeCommand +
-                textAfterCommand
-            );
+      if (selectionMatchesNodeContents(selection, content)) {
+        selectNodeContents(root);
+      } else {
+        selectNodeContents(content);
+      }
 
-        location.block.type =
-            targetType;
-
-        applyTypeDefaults(
-            location.block,
-            targetType
-        );
-
-        const caretOffset =
-            textBeforeCommand.length;
-
-        closeSlashMenu();
-
-        if (targetType === "divider") {
-            const paragraph =
-                Storage.createDefaultBlock(
-                    "paragraph"
-                );
-
-            location.collection.splice(
-                location.index + 1,
-                0,
-                paragraph
-            );
-
-            render({
-                blockId: paragraph.id,
-                position: "start"
-            });
-        } else {
-            render({
-                blockId: location.block.id,
-                offset: caretOffset
-            });
-        }
-
-        emitChange();
+      saveSelection();
+      return true;
     }
 
-    /**
-     * Closes the slash menu.
-     */
-    function closeSlashMenu() {
-        if (slashMenuElement) {
-            slashMenuElement.hidden = true;
-            slashMenuElement.replaceChildren();
-        }
-
-        slashState = null;
-        selectedSlashIndex = 0;
+    function isCaretAtStart(content, range) {
+      if (!content || !range) return false;
+      const before = document.createRange();
+      before.selectNodeContents(content);
+      before.setEnd(range.startContainer, range.startOffset);
+      return before.toString() === '';
     }
 
-    // =========================================================================
-    // Block menus
-    // =========================================================================
-
-    /**
-     * Opens the block action menu.
-     *
-     * @param {string} blockId
-     * @param {HTMLElement} anchor
-     */
-    function openBlockMenu(blockId, anchor) {
-        closeAllMenus();
-
-        activeMenuBlockId = blockId;
-
-        blockMenuElement.replaceChildren();
-
-        const items = [
-            {
-                action: "change-type",
-                icon: "↻",
-                title: "Turn into"
-            },
-            {
-                action: "duplicate",
-                icon: "⧉",
-                title: "Duplicate"
-            },
-            {
-                action: "move-up",
-                icon: "↑",
-                title: "Move up"
-            },
-            {
-                action: "move-down",
-                icon: "↓",
-                title: "Move down"
-            },
-            {
-                action: "indent",
-                icon: "→",
-                title: "Indent"
-            },
-            {
-                action: "outdent",
-                icon: "←",
-                title: "Outdent"
-            },
-            {
-                action: "delete",
-                icon: "⌫",
-                title: "Delete",
-                danger: true
-            }
-        ];
-
-        for (const item of items) {
-            const button =
-                document.createElement("button");
-
-            button.type = "button";
-            button.className =
-                "block-menu-item";
-
-            if (item.danger) {
-                button.classList.add(
-                    "block-menu-item--danger"
-                );
-            }
-
-            button.dataset.blockAction =
-                item.action;
-
-            button.innerHTML = `
-                <span class="block-menu-item__icon"
-                    aria-hidden="true">${item.icon}</span>
-                <span class="block-menu-item__title">${item.title}</span>
-            `;
-
-            blockMenuElement.appendChild(button);
-        }
-
-        blockMenuElement.hidden = false;
-
-        positionMenuNearElement(
-            blockMenuElement,
-            anchor
-        );
-
-        anchor.setAttribute(
-            "aria-expanded",
-            "true"
-        );
+    function isCaretAtEnd(content, range) {
+      if (!content || !range) return false;
+      const after = document.createRange();
+      after.selectNodeContents(content);
+      after.setStart(range.endContainer, range.endOffset);
+      return after.toString() === '';
     }
 
-    /**
-     * Handles block menu actions.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleBlockMenuClick(event) {
-        const button =
-            event.target.closest(
-                "[data-block-action]"
-            );
-
-        if (
-            !button ||
-            !activeMenuBlockId
-        ) {
-            return;
-        }
-
-        executeBlockAction(
-            activeMenuBlockId,
-            button.dataset.blockAction,
-            button
-        );
+    function extractRightHtml(content, range) {
+      const tailRange = document.createRange();
+      tailRange.selectNodeContents(content);
+      tailRange.setStart(range.startContainer, range.startOffset);
+      const fragment = tailRange.extractContents();
+      const container = document.createElement('div');
+      container.append(fragment);
+      return container.innerHTML || '<br>';
     }
 
-    /**
-     * Executes a block action.
-     *
-     * @param {string} blockId
-     * @param {string} action
-     * @param {HTMLElement} [anchor]
-     */
-    function executeBlockAction(
-        blockId,
-        action,
-        anchor
-    ) {
-        if (action === "change-type") {
-            openBlockTypeMenu(
-                blockId,
-                anchor ||
-                    blockMenuElement
-            );
+    function splitCurrentBlock(block, content) {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return null;
 
-            return;
-        }
+      const range = selection.getRangeAt(0);
+      if (!range.collapsed) range.deleteContents();
 
-        closeAllMenus();
+      const rightHtml = extractRightHtml(content, range);
+      normalizeEmptyContent(content);
 
-        switch (action) {
-            case "duplicate":
-                duplicateBlock(blockId);
-                break;
+      const currentType = block.dataset.type;
+      const nextType = ['heading-1', 'heading-2', 'heading-3', 'quote'].includes(currentType)
+        ? 'paragraph'
+        : currentType;
 
-            case "move-up":
-                moveBlock(blockId, -1);
-                break;
+      const nextBlock = createBlock(nextType, {
+        indent: block.dataset.indent,
+        html: rightHtml,
+        checked: false
+      });
 
-            case "move-down":
-                moveBlock(blockId, 1);
-                break;
-
-            case "indent":
-                indentBlock(blockId);
-                break;
-
-            case "outdent":
-                outdentBlock(blockId);
-                break;
-
-            case "delete":
-                deleteBlock(blockId);
-                break;
-
-            default:
-                break;
-        }
+      insertAfter(block, nextBlock);
+      focusAtStart(getContentElement(nextBlock));
+      emitChange();
+      return nextBlock;
     }
 
-    /**
-     * Opens the block type menu.
-     *
-     * @param {string} blockId
-     * @param {HTMLElement} anchor
-     */
-    function openBlockTypeMenu(
-        blockId,
-        anchor
-    ) {
-        activeMenuBlockId = blockId;
-
-        blockTypeMenuElement.replaceChildren();
-
-        const label =
-            document.createElement("div");
-
-        label.className =
-            "slash-menu__label";
-
-        label.textContent =
-            "Turn into";
-
-        blockTypeMenuElement.appendChild(label);
-
-        for (
-            const definition of
-            BLOCK_DEFINITIONS
-        ) {
-            blockTypeMenuElement.appendChild(
-                createBlockTypeMenuItem(
-                    definition,
-                    false,
-                    "block-type"
-                )
-            );
-        }
-
-        const location =
-            findBlockLocation(blockId);
-
-        if (
-            location?.block.type ===
-            "toggle"
-        ) {
-            const styleLabel =
-                document.createElement("div");
-
-            styleLabel.className =
-                "slash-menu__label";
-
-            styleLabel.textContent =
-                "Toggle title style";
-
-            blockTypeMenuElement.appendChild(
-                styleLabel
-            );
-
-            const toggleStyles = [
-                {
-                    value: "paragraph",
-                    title: "Text",
-                    icon: "T"
-                },
-                {
-                    value: "heading-1",
-                    title: "Heading 1",
-                    icon: "H1"
-                },
-                {
-                    value: "heading-2",
-                    title: "Heading 2",
-                    icon: "H2"
-                }
-            ];
-
-            for (const style of toggleStyles) {
-                const button =
-                    document.createElement(
-                        "button"
-                    );
-
-                button.type = "button";
-                button.className =
-                    "block-type-menu-item";
-
-                button.dataset.toggleTitleStyle =
-                    style.value;
-
-                button.innerHTML = `
-                    <span class="block-type-menu-item__icon"
-                        aria-hidden="true">${style.icon}</span>
-                    <span class="block-type-menu-item__content">
-                        <span class="block-type-menu-item__title">
-                            ${style.title}
-                        </span>
-                        <span class="block-type-menu-item__description">
-                            Style the toggle title
-                        </span>
-                    </span>
-                `;
-
-                blockTypeMenuElement.appendChild(
-                    button
-                );
-            }
-        }
-
-        blockMenuElement.hidden = true;
-        blockTypeMenuElement.hidden = false;
-
-        positionMenuNearElement(
-            blockTypeMenuElement,
-            anchor
-        );
+    function replaceBlockWithParagraph(block) {
+      const currentContent = getContentElement(block);
+      const paragraph = createBlock('paragraph', {
+        indent: block.dataset.indent,
+        html: currentContent?.innerHTML || '<br>'
+      });
+      block.replaceWith(paragraph);
+      focusAtStart(getContentElement(paragraph));
+      emitChange();
+      return paragraph;
     }
 
-    /**
-     * Creates one type menu button.
-     *
-     * @param {Object} definition
-     * @param {boolean} selected
-     * @param {string} variant
-     * @returns {HTMLButtonElement}
-     */
-    function createBlockTypeMenuItem(
-        definition,
-        selected,
-        variant
-    ) {
-        const button =
-            document.createElement("button");
+    function exitToggleFromBody(block) {
+      const toggle = block.parentElement?.closest('.block[data-type="toggle"]');
+      if (!toggle) return false;
 
-        button.type = "button";
+      const body = getToggleBody(toggle);
+      const isLastChild = body?.lastElementChild === block;
+      if (!isLastChild) return false;
 
-        button.className =
-            variant === "slash"
-                ? "slash-menu-item"
-                : "block-type-menu-item";
-
-        button.dataset.blockType =
-            definition.type;
-
-        button.setAttribute(
-            "role",
-            "menuitem"
-        );
-
-        if (variant === "slash") {
-            button.setAttribute(
-                "aria-selected",
-                String(selected)
-            );
-
-            if (selected) {
-                button.classList.add(
-                    "slash-menu-item--active"
-                );
-            }
-        }
-
-        const prefix =
-            variant === "slash"
-                ? "slash-menu-item"
-                : "block-type-menu-item";
-
-        button.innerHTML = `
-            <span class="${prefix}__icon"
-                aria-hidden="true">${definition.icon}</span>
-            <span class="${prefix}__content">
-                <span class="${prefix}__title">
-                    ${definition.title}
-                </span>
-                <span class="${prefix}__description">
-                    ${definition.description}
-                </span>
-            </span>
-        `;
-
-        return button;
+      block.remove();
+      const paragraph = createBlock('paragraph', {
+        indent: toggle.dataset.indent
+      });
+      insertAfter(toggle, paragraph);
+      focusAtStart(getContentElement(paragraph));
+      emitChange();
+      return true;
     }
 
-    /**
-     * Handles block type menu clicks.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleBlockTypeMenuClick(event) {
-        const typeButton =
-            event.target.closest(
-                "[data-block-type]"
-            );
-
-        if (
-            typeButton &&
-            activeMenuBlockId
-        ) {
-            changeBlockType(
-                activeMenuBlockId,
-                typeButton.dataset.blockType
-            );
-
-            closeAllMenus();
-            return;
-        }
-
-        const styleButton =
-            event.target.closest(
-                "[data-toggle-title-style]"
-            );
-
-        if (
-            styleButton &&
-            activeMenuBlockId
-        ) {
-            changeToggleTitleStyle(
-                activeMenuBlockId,
-                styleButton.dataset
-                    .toggleTitleStyle
-            );
-
-            closeAllMenus();
-        }
-    }
-
-    // =========================================================================
-    // Context menu
-    // =========================================================================
-
-    /**
-     * Opens the custom context menu.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleEditorContextMenu(event) {
-        if (event.shiftKey) {
-            return;
-        }
-
-        const blockElement =
-            event.target.closest(
-                ".editor-block"
-            );
-
-        if (!blockElement) {
-            return;
-        }
-
+    function handleCodeEnter(event, block, content, range) {
+      if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
+        const paragraph = createBlock('paragraph', {
+          indent: block.dataset.indent
+        });
+        insertAfter(block, paragraph);
+        focusAtStart(getContentElement(paragraph));
+        emitChange();
+        return true;
+      }
 
-        saveCurrentSelection();
+      const textBeforeRange = document.createRange();
+      textBeforeRange.selectNodeContents(content);
+      textBeforeRange.setEnd(range.startContainer, range.startOffset);
+      const textBefore = textBeforeRange.toString();
 
-        activeMenuBlockId =
-            blockElement.dataset.blockId;
+      if (range.collapsed && isCaretAtEnd(content, range) && textBefore.endsWith('\n')) {
+        event.preventDefault();
+        content.textContent = textBefore.slice(0, -1);
+        const paragraph = createBlock('paragraph', {
+          indent: block.dataset.indent
+        });
+        insertAfter(block, paragraph);
+        focusAtStart(getContentElement(paragraph));
+        emitChange();
+        return true;
+      }
 
-        closeAllMenus();
-
-        contextMenuElement.hidden = false;
-
-        positionMenuAtPoint(
-            contextMenuElement,
-            event.clientX,
-            event.clientY
-        );
+      event.preventDefault();
+      document.execCommand('insertText', false, '\n');
+      emitChange();
+      return true;
     }
 
-    /**
-     * Handles context menu actions.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleContextMenuClick(event) {
-        const formatButton =
-            event.target.closest(
-                "[data-format]"
-            );
+    function handleEnter(event) {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection) || selection.rangeCount === 0) return false;
 
-        if (formatButton) {
-            restoreSavedSelection();
+      const range = selection.getRangeAt(0);
+      const block = getBlockFromNode(range.startContainer);
+      if (!block) return false;
 
-            applyInlineFormat(
-                formatButton.dataset.format
-            );
-
-            closeAllMenus();
-            return;
+      const content = getContentElement(block);
+      if (!content) {
+        if (block.dataset.type === 'divider') {
+          event.preventDefault();
+          const paragraph = createBlock('paragraph', { indent: block.dataset.indent });
+          insertAfter(block, paragraph);
+          focusAtStart(getContentElement(paragraph));
+          emitChange();
+          return true;
         }
-
-        const actionButton =
-            event.target.closest(
-                "[data-context-action]"
-            );
-
-        if (
-            actionButton &&
-            activeMenuBlockId
-        ) {
-            executeBlockAction(
-                activeMenuBlockId,
-                actionButton.dataset
-                    .contextAction,
-                actionButton
-            );
-        }
-    }
-
-    // =========================================================================
-    // Inline formatting
-    // =========================================================================
-
-    /**
-     * Handles keyboard formatting shortcuts.
-     *
-     * @param {KeyboardEvent} event
-     * @returns {boolean}
-     */
-    function handleFormattingShortcut(event) {
-        const modifier =
-            event.ctrlKey ||
-            event.metaKey;
-
-        if (!modifier) {
-            return false;
-        }
-
-        const key =
-            event.key.toLowerCase();
-
-        if (key === "b") {
-            event.preventDefault();
-            applyInlineFormat("bold");
-            return true;
-        }
-
-        if (key === "i") {
-            event.preventDefault();
-            applyInlineFormat("italic");
-            return true;
-        }
-
-        if (
-            event.shiftKey &&
-            key === "h"
-        ) {
-            event.preventDefault();
-            applyInlineFormat("highlight");
-            return true;
-        }
-
         return false;
-    }
+      }
 
-    /**
-     * Applies inline formatting to the current selection.
-     *
-     * @param {string} format
-     */
-    function applyInlineFormat(format) {
-        const commandMap = {
-            bold: "bold",
-            italic: "italic",
-            strikethrough: "strikeThrough",
-            clear: "removeFormat"
-        };
-
-        if (commandMap[format]) {
-            document.execCommand(
-                commandMap[format],
-                false,
-                null
-            );
-        } else if (format === "highlight") {
-            toggleCustomInlineMark(
-                "mark"
-            );
-        } else if (format === "code") {
-            toggleCustomInlineMark(
-                "code"
-            );
-        }
-
-        synchronizeActiveEditable();
-        updateSelectionToolbar();
-    }
-
-    /**
-     * Toggles a custom inline element.
-     *
-     * @param {string} tagName
-     */
-    function toggleCustomInlineMark(tagName) {
-        const selection =
-            window.getSelection();
-
-        if (
-            !selection ||
-            selection.rangeCount === 0 ||
-            selection.isCollapsed
-        ) {
-            return;
-        }
-
-        const range =
-            selection.getRangeAt(0);
-
-        const ancestor =
-            getClosestElement(
-                range.commonAncestorContainer,
-                tagName
-            );
-
-        if (ancestor) {
-            unwrapElement(ancestor);
-            return;
-        }
-
-        const wrapper =
-            document.createElement(tagName);
-
-        try {
-            range.surroundContents(wrapper);
-
-            selection.removeAllRanges();
-
-            const nextRange =
-                document.createRange();
-
-            nextRange.selectNodeContents(
-                wrapper
-            );
-
-            selection.addRange(nextRange);
-        } catch (error) {
-            const fragment =
-                range.extractContents();
-
-            wrapper.appendChild(fragment);
-            range.insertNode(wrapper);
-
-            selection.removeAllRanges();
-
-            const nextRange =
-                document.createRange();
-
-            nextRange.selectNodeContents(
-                wrapper
-            );
-
-            selection.addRange(nextRange);
-        }
-    }
-
-    /**
-     * Unwraps an element while preserving its children.
-     *
-     * @param {HTMLElement} element
-     */
-    function unwrapElement(element) {
-        const parent =
-            element.parentNode;
-
-        while (element.firstChild) {
-            parent.insertBefore(
-                element.firstChild,
-                element
-            );
-        }
-
-        parent.removeChild(element);
-    }
-
-    /**
-     * Handles selection toolbar clicks.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleSelectionToolbarClick(event) {
-        const button =
-            event.target.closest(
-                "[data-format]"
-            );
-
-        if (!button) {
-            return;
-        }
-
-        restoreSavedSelection();
-
-        applyInlineFormat(
-            button.dataset.format
-        );
-
-        saveCurrentSelection();
-    }
-
-    /**
-     * Shows or hides the selection toolbar.
-     */
-    function handleSelectionChange() {
-        if (isRendering) {
-            return;
-        }
-
-        const selection =
-            window.getSelection();
-
-        if (
-            !selection ||
-            selection.rangeCount === 0 ||
-            selection.isCollapsed
-        ) {
-            hideSelectionToolbar();
-            return;
-        }
-
-        const range =
-            selection.getRangeAt(0);
-
-        const contentElement =
-            getClosestElement(
-                range.commonAncestorContainer,
-                ".block-content"
-            );
-
-        if (!contentElement) {
-            hideSelectionToolbar();
-            return;
-        }
-
-        saveCurrentSelection();
-        showSelectionToolbar(range);
-    }
-
-    /**
-     * Displays the selection toolbar.
-     *
-     * @param {Range} range
-     */
-    function showSelectionToolbar(range) {
-        const rect =
-            range.getBoundingClientRect();
-
-        if (
-            rect.width === 0 &&
-            rect.height === 0
-        ) {
-            hideSelectionToolbar();
-            return;
-        }
-
-        selectionToolbarElement.hidden =
-            false;
-
-        const toolbarRect =
-            selectionToolbarElement
-                .getBoundingClientRect();
-
-        let left =
-            rect.left +
-            rect.width / 2 -
-            toolbarRect.width / 2;
-
-        let top =
-            rect.top -
-            toolbarRect.height -
-            8;
-
-        if (top < 8) {
-            top =
-                rect.bottom + 8;
-        }
-
-        left = clamp(
-            left,
-            8,
-            window.innerWidth -
-                toolbarRect.width -
-                8
-        );
-
-        selectionToolbarElement.style.left =
-            `${left}px`;
-
-        selectionToolbarElement.style.top =
-            `${top}px`;
-
-        updateSelectionToolbar();
-    }
-
-    /**
-     * Updates active formatting states.
-     */
-    function updateSelectionToolbar() {
-        if (
-            !selectionToolbarElement ||
-            selectionToolbarElement.hidden
-        ) {
-            return;
-        }
-
-        const stateMap = {
-            bold:
-                document.queryCommandState(
-                    "bold"
-                ),
-            italic:
-                document.queryCommandState(
-                    "italic"
-                ),
-            strikethrough:
-                document.queryCommandState(
-                    "strikeThrough"
-                )
-        };
-
-        selectionToolbarElement
-            .querySelectorAll("[data-format]")
-            .forEach(button => {
-                const format =
-                    button.dataset.format;
-
-                if (
-                    Object.prototype
-                        .hasOwnProperty.call(
-                            stateMap,
-                            format
-                        )
-                ) {
-                    button.setAttribute(
-                        "aria-pressed",
-                        String(
-                            stateMap[format]
-                        )
-                    );
-                }
-            });
-    }
-
-    /**
-     * Hides the text selection toolbar.
-     */
-    function hideSelectionToolbar() {
-        if (selectionToolbarElement) {
-            selectionToolbarElement.hidden =
-                true;
-        }
-    }
-
-    /**
-     * Synchronizes the currently focused editable block.
-     */
-    function synchronizeActiveEditable() {
-        const selection =
-            window.getSelection();
-
-        if (
-            !selection ||
-            selection.rangeCount === 0
-        ) {
-            return;
-        }
-
-        const contentElement =
-            getClosestElement(
-                selection
-                    .getRangeAt(0)
-                    .commonAncestorContainer,
-                ".block-content"
-            );
-
-        if (contentElement) {
-            synchronizeContentElement(
-                contentElement
-            );
-        }
-    }
-
-    // =========================================================================
-    // Drag and drop
-    // =========================================================================
-
-    /**
-     * Starts dragging a block.
-     *
-     * @param {DragEvent} event
-     */
-    function handleDragStart(event) {
-        const handle =
-            event.target.closest(
-                ".block-handle"
-            );
-
-        if (!handle) {
-            event.preventDefault();
-            return;
-        }
-
-        const blockElement =
-            handle.closest(
-                ".editor-block"
-            );
-
-        draggedBlockId =
-            blockElement?.dataset.blockId ||
-            null;
-
-        if (!draggedBlockId) {
-            event.preventDefault();
-            return;
-        }
-
-        event.dataTransfer.effectAllowed =
-            "move";
-
-        event.dataTransfer.setData(
-            "text/plain",
-            draggedBlockId
-        );
-
-        blockElement.classList.add(
-            "is-dragging"
-        );
-
-        showDragPreview(
-            event,
-            draggedBlockId
-        );
-    }
-
-    /**
-     * Updates the current drop target.
-     *
-     * @param {DragEvent} event
-     */
-    function handleDragOver(event) {
-        if (!draggedBlockId) {
-            return;
-        }
-
-        const targetElement =
-            event.target.closest(
-                ".editor-block"
-            );
-
-        if (!targetElement) {
-            return;
-        }
-
-        const targetId =
-            targetElement.dataset.blockId;
-
-        if (
-            !targetId ||
-            targetId === draggedBlockId
-        ) {
-            return;
-        }
-
-        const draggedLocation =
-            findBlockLocation(
-                draggedBlockId
-            );
-
-        if (
-            draggedLocation &&
-            blockContainsId(
-                draggedLocation.block,
-                targetId
-            )
-        ) {
-            return;
-        }
-
+      const inToggleTitle = content.classList.contains('toggle-title');
+      if (inToggleTitle) {
         event.preventDefault();
+        block.dataset.open = 'true';
+        const body = getToggleBody(block);
+        let firstChild = body.querySelector(':scope > .block');
+        if (!firstChild) {
+          firstChild = createBlock('paragraph');
+          body.append(firstChild);
+        }
+        focusAtStart(getContentElement(firstChild));
+        emitChange();
+        return true;
+      }
 
-        event.dataTransfer.dropEffect =
-            "move";
+      if (block.dataset.type === 'code') {
+        return handleCodeEnter(event, block, content, range);
+      }
 
-        const rect =
-            targetElement.getBoundingClientRect();
+      const empty = isContentEmpty(content);
+      if (empty) {
+        const indent = clampIndent(block.dataset.indent);
 
-        const relativeY =
-            event.clientY - rect.top;
-
-        let position = "after";
-
-        if (
-            relativeY <
-            rect.height * 0.35
-        ) {
-            position = "before";
-        } else if (
-            relativeY >
-            rect.height * 0.65
-        ) {
-            position = "after";
-        } else {
-            const targetLocation =
-                findBlockLocation(targetId);
-
-            position =
-                targetLocation?.block.type ===
-                "toggle"
-                    ? "inside"
-                    : "after";
+        // An empty nested block exits one indentation level at a time.
+        // Inside a toggle, the following Enter exits the toggle itself.
+        if (indent > 0) {
+          event.preventDefault();
+          outdentBlock(block);
+          focusAtStart(content);
+          return true;
         }
 
-        dropTarget = {
-            targetId,
-            position
-        };
+        if (block.parentElement?.classList.contains('toggle-body') && exitToggleFromBody(block)) {
+          event.preventDefault();
+          return true;
+        }
 
-        showDropIndicator(
-            targetElement,
-            position
-        );
+        if (['bulleted-list', 'numbered-list', 'checklist', 'quote', 'heading-1', 'heading-2', 'heading-3'].includes(block.dataset.type)) {
+          event.preventDefault();
+          replaceBlockWithParagraph(block);
+          return true;
+        }
+      }
 
-        moveDragPreview(event);
+      event.preventDefault();
+      splitCurrentBlock(block, content);
+      return true;
     }
 
-    /**
-     * Drops a block.
-     *
-     * @param {DragEvent} event
-     */
-    function handleDrop(event) {
-        if (
-            !draggedBlockId ||
-            !dropTarget
-        ) {
-            clearDragState();
-            return;
-        }
+    function insertTextAtSelection(text) {
+      document.execCommand('insertText', false, text);
+    }
 
-        event.preventDefault();
+    function handleTab(event) {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection) || selection.rangeCount === 0) return false;
 
-        const sourceLocation =
-            findBlockLocation(
-                draggedBlockId
-            );
+      const block = getBlockFromNode(selection.anchorNode);
+      if (!block) return false;
 
-        const targetLocation =
-            findBlockLocation(
-                dropTarget.targetId
-            );
+      event.preventDefault();
 
-        if (
-            !sourceLocation ||
-            !targetLocation ||
-            sourceLocation.block.id ===
-                targetLocation.block.id
-        ) {
-            clearDragState();
-            return;
-        }
+      if (block.dataset.type === 'code') {
+        if (event.shiftKey) {
+          const content = getContentElement(block);
+          const range = selection.getRangeAt(0);
+          const beforeRange = document.createRange();
+          beforeRange.selectNodeContents(content);
+          beforeRange.setEnd(range.startContainer, range.startOffset);
+          const before = beforeRange.toString();
 
-        const [draggedBlock] =
-            sourceLocation.collection.splice(
-                sourceLocation.index,
-                1
-            );
-
-        const refreshedTarget =
-            findBlockLocation(
-                dropTarget.targetId
-            );
-
-        if (!refreshedTarget) {
-            sourceLocation.collection.splice(
-                sourceLocation.index,
-                0,
-                draggedBlock
-            );
-
-            clearDragState();
-            return;
-        }
-
-        if (dropTarget.position === "inside") {
-            refreshedTarget.block.children.push(
-                draggedBlock
-            );
-
-            if (
-                refreshedTarget.block.type ===
-                "toggle"
-            ) {
-                refreshedTarget.block.open =
-                    true;
-            }
+          if (before.endsWith('  ')) {
+            range.setStart(range.startContainer, Math.max(0, range.startOffset - 2));
+            range.deleteContents();
+          }
         } else {
-            const insertionIndex =
-                refreshedTarget.index +
-                (
-                    dropTarget.position ===
-                    "after"
-                        ? 1
-                        : 0
-                );
+          insertTextAtSelection('  ');
+        }
+        emitChange();
+        return true;
+      }
 
-            refreshedTarget.collection.splice(
-                insertionIndex,
-                0,
-                draggedBlock
-            );
+      if (event.shiftKey) {
+        outdentBlock(block);
+      } else {
+        indentBlock(block);
+      }
+
+      return true;
+    }
+
+    function handleBackspace(event) {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection) || selection.rangeCount === 0 || !selection.isCollapsed) {
+        return false;
+      }
+
+      const range = selection.getRangeAt(0);
+      const block = getBlockFromNode(range.startContainer);
+      const content = getContentElement(block);
+      if (!block || !content || !isCaretAtStart(content, range)) return false;
+
+      if (block.dataset.type === 'code' && isContentEmpty(content)) {
+        event.preventDefault();
+        replaceBlockWithParagraph(block);
+        return true;
+      }
+
+      const indent = clampIndent(block.dataset.indent);
+      if (indent > 0) {
+        event.preventDefault();
+        outdentBlock(block);
+        focusAtStart(content);
+        return true;
+      }
+
+      if (!['paragraph', 'toggle', 'code'].includes(block.dataset.type)) {
+        event.preventDefault();
+        const paragraph = transformBlock(block, 'paragraph');
+        focusAtStart(getContentElement(paragraph));
+        return true;
+      }
+
+      if (isContentEmpty(content)) {
+        const previous = block.previousElementSibling;
+        if (previous?.classList.contains('block')) {
+          event.preventDefault();
+          block.remove();
+          focusAtEnd(getContentElement(previous));
+          ensureRootHasBlock();
+          emitChange();
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    function handleDeleteWholeNote(event) {
+      const selection = window.getSelection();
+      if (!selectionMatchesNodeContents(selection, root)) return false;
+      if (!['Backspace', 'Delete'].includes(event.key)) return false;
+
+      event.preventDefault();
+      root.replaceChildren(createBlock('paragraph'));
+      focusAtStart(getContentElement(root.firstElementChild));
+      emitChange();
+      return true;
+    }
+
+    function getPlainText(content) {
+      return (content?.textContent || '').replace(/\u200B/g, '');
+    }
+
+    function clearContent(content) {
+      content.innerHTML = '<br>';
+    }
+
+    function removeLeadingCharacters(content, characterCount) {
+      if (!content || characterCount <= 0) return;
+
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      let remaining = characterCount;
+      let endNode = null;
+      let endOffset = 0;
+
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (remaining <= node.textContent.length) {
+          endNode = node;
+          endOffset = remaining;
+          break;
+        }
+        remaining -= node.textContent.length;
+      }
+
+      if (!endNode) return;
+
+      const range = document.createRange();
+      range.setStart(content, 0);
+      range.setEnd(endNode, endOffset);
+      range.deleteContents();
+      normalizeEmptyContent(content);
+    }
+
+    function applyShortcut(block, content, text) {
+      if (!block || !content) return false;
+
+      const isToggleTitle = content.classList.contains('toggle-title');
+      const headingPrefixes = [
+        ['### ', 'heading-3'],
+        ['## ', 'heading-2'],
+        ['# ', 'heading-1']
+      ];
+
+      if (isToggleTitle) {
+        const headingMatch = headingPrefixes.find(([prefix]) => text.startsWith(prefix));
+        if (!headingMatch) return false;
+
+        removeLeadingCharacters(content, headingMatch[0].length);
+        content.dataset.titleStyle = headingMatch[1];
+        focusAtStart(content);
+        emitChange();
+        return true;
+      }
+
+      // Also supports pasted or pre-existing content such as "> # Heading".
+      const compoundToggle = text.match(/^>\s(#{1,3})\s/);
+      if (compoundToggle) {
+        const prefixLength = compoundToggle[0].length;
+        const titleStyle = `heading-${compoundToggle[1].length}`;
+        removeLeadingCharacters(content, prefixLength);
+        const toggle = transformBlock(block, 'toggle', { titleStyle });
+        focusAtStart(getContentElement(toggle));
+        return true;
+      }
+
+      const mappings = [
+        ['``` ', 'code'],
+        ['--- ', 'divider'],
+        ['[ ] ', 'checklist'],
+        ['[] ', 'checklist'],
+        ['### ', 'heading-3'],
+        ['## ', 'heading-2'],
+        ['# ', 'heading-1'],
+        ['1. ', 'numbered-list'],
+        ['- ', 'bulleted-list'],
+        ['> ', 'toggle']
+      ];
+
+      const mapping = mappings.find(([prefix]) => text.startsWith(prefix));
+      if (!mapping) return false;
+
+      const [prefix, targetType] = mapping;
+      const remainingText = text.slice(prefix.length);
+      if (targetType === 'divider' && remainingText.trim()) return false;
+
+      const sourceType = block.dataset.type;
+      removeLeadingCharacters(content, prefix.length);
+
+      const transformOptions = {};
+      if (targetType === 'toggle' && sourceType.startsWith('heading-')) {
+        transformOptions.titleStyle = sourceType;
+      }
+
+      const transformed = transformBlock(block, targetType, transformOptions);
+      if (targetType === 'divider') {
+        const paragraph = createBlock('paragraph', { indent: transformed.dataset.indent });
+        insertAfter(transformed, paragraph);
+        focusAtStart(getContentElement(paragraph));
+      } else {
+        focusAtStart(getContentElement(transformed));
+      }
+      return true;
+    }
+
+    function updateSlashMenu(block, content) {
+      const text = getPlainText(content);
+      if (!text.startsWith('/') || text.includes('\n')) {
+        onCloseMenu();
+        return;
+      }
+
+      const range = window.getSelection()?.rangeCount
+        ? window.getSelection().getRangeAt(0)
+        : null;
+      const rect = range?.getBoundingClientRect();
+      const fallbackRect = content.getBoundingClientRect();
+
+      activeMenuBlock = block;
+      saveSelection();
+      onRequestMenu({
+        mode: 'slash',
+        block,
+        query: text.slice(1),
+        x: rect?.left || fallbackRect.left,
+        y: (rect?.bottom || fallbackRect.bottom) + 6
+      });
+    }
+
+    function removeSlashQuery(block) {
+      const content = getContentElement(block);
+      if (!content) return;
+      const text = getPlainText(content);
+      if (text.startsWith('/')) clearContent(content);
+    }
+
+    function getBlockHtml(block) {
+      const content = getContentElement(block);
+      if (!content) return '<br>';
+      if (block.dataset.type === 'code') {
+        return escapeHtml(content.textContent || '');
+      }
+      return content.innerHTML || '<br>';
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function transformBlock(block, targetType, options = {}) {
+      if (!block) block = getCurrentBlock();
+      if (!block) return null;
+
+      const normalizedTarget = normalizeType(targetType);
+      const sourceType = block.dataset.type;
+      const indent = block.dataset.indent;
+
+      if (sourceType === normalizedTarget && normalizedTarget !== 'toggle') {
+        return block;
+      }
+
+      if (sourceType === 'toggle') {
+        const title = getContentElement(block);
+        const titleHtml = title?.innerHTML || '<br>';
+        const body = getToggleBody(block);
+        const children = [...(body?.children || [])];
+
+        if (normalizedTarget === 'toggle') {
+          if (options.titleStyle) title.dataset.titleStyle = options.titleStyle;
+          emitChange();
+          return block;
         }
 
-        clearDragState();
+        const replacement = createBlock(normalizedTarget, {
+          indent,
+          html: titleHtml
+        });
+        block.replaceWith(replacement);
 
-        render({
-            blockId: draggedBlock.id,
-            position: "end"
+        let insertionPoint = replacement;
+        children.forEach((child) => {
+          insertionPoint.insertAdjacentElement('afterend', child);
+          insertionPoint = child;
         });
 
+        refreshNumberedMarkers();
         emitChange();
+        return replacement;
+      }
+
+      const sourceContent = getContentElement(block);
+      const sourceHtml = sourceType === 'code'
+        ? escapeHtml(sourceContent?.textContent || '')
+        : sourceContent?.innerHTML || '<br>';
+
+      if (normalizedTarget === 'toggle') {
+        const titleStyle = options.titleStyle
+          || (sourceType.startsWith('heading-') ? sourceType : 'paragraph');
+        const toggle = createBlock('toggle', {
+          indent,
+          html: sourceHtml,
+          titleStyle,
+          open: true
+        });
+        block.replaceWith(toggle);
+        refreshNumberedMarkers();
+        emitChange();
+        return toggle;
+      }
+
+      const replacement = createBlock(normalizedTarget, {
+        indent,
+        html: sourceHtml,
+        text: sourceType === 'code' ? sourceContent?.textContent || '' : undefined,
+        checked: normalizedTarget === 'checklist' ? false : undefined
+      });
+
+      block.replaceWith(replacement);
+      refreshNumberedMarkers();
+      emitChange();
+      return replacement;
     }
 
-    /**
-     * Ends drag mode.
-     */
-    function handleDragEnd() {
-        clearDragState();
+    function setToggleTitleStyle(block, titleStyle) {
+      if (!block || block.dataset.type !== 'toggle') return;
+      const title = getContentElement(block);
+      title.dataset.titleStyle = ['paragraph', 'heading-1', 'heading-2', 'heading-3'].includes(titleStyle)
+        ? titleStyle
+        : 'paragraph';
+      emitChange();
     }
 
-    /**
-     * Shows the drop indicator.
-     *
-     * @param {HTMLElement} targetElement
-     * @param {string} position
-     */
-    function showDropIndicator(
-        targetElement,
-        position
-    ) {
-        const rect =
-            targetElement.getBoundingClientRect();
+    function insertBlock(type, referenceBlock = null, options = {}) {
+      const reference = referenceBlock || activeMenuBlock || ensureCaretBlock();
+      const block = createBlock(type, {
+        indent: reference?.dataset.indent || 0,
+        ...options
+      });
+      insertAfter(reference, block);
+      focusAtStart(getContentElement(block));
+      emitChange();
+      return block;
+    }
 
-        dropIndicatorElement.hidden = false;
+    function duplicateBlock(block = null) {
+      const source = block || activeMenuBlock || getCurrentBlock();
+      if (!source) return null;
 
-        if (position === "inside") {
-            dropIndicatorElement.style.left =
-                `${rect.left + 34}px`;
+      const clone = source.cloneNode(true);
+      clone.classList.remove('dragging', 'drag-target-before', 'drag-target-after');
+      clone.draggable = false;
 
-            dropIndicatorElement.style.top =
-                `${rect.bottom - 3}px`;
+      clone.querySelectorAll('.block').forEach((child) => {
+        child.dataset.blockId = nextBlockId();
+        child.draggable = false;
+      });
+      clone.dataset.blockId = nextBlockId();
 
-            dropIndicatorElement.style.width =
-                `${Math.max(
-                    40,
-                    rect.width - 40
-                )}px`;
+      insertAfter(source, clone);
+      focusAtEnd(getContentElement(clone));
+      emitChange();
+      return clone;
+    }
+
+    function deleteBlock(block = null) {
+      const target = block || activeMenuBlock || getCurrentBlock();
+      if (!target) return;
+
+      const previous = target.previousElementSibling;
+      const next = target.nextElementSibling;
+      const parent = target.parentElement;
+      target.remove();
+
+      ensureRootHasBlock();
+
+      const focusTarget = previous?.classList.contains('block')
+        ? previous
+        : next?.classList.contains('block')
+          ? next
+          : parent?.querySelector('.block') || root.querySelector('.block');
+
+      focusAtEnd(getContentElement(focusTarget));
+      emitChange();
+    }
+
+    function moveBlock(block, direction) {
+      const target = block || activeMenuBlock || getCurrentBlock();
+      if (!target) return;
+
+      if (direction === 'up') {
+        const previous = target.previousElementSibling;
+        if (previous?.classList.contains('block')) {
+          previous.insertAdjacentElement('beforebegin', target);
+        }
+      } else {
+        const next = target.nextElementSibling;
+        if (next?.classList.contains('block')) {
+          next.insertAdjacentElement('afterend', target);
+        }
+      }
+
+      focusAtStart(getContentElement(target));
+      emitChange();
+    }
+
+    function executeMenuCommand(command, block = null) {
+      const target = block || activeMenuBlock || getCurrentBlock();
+      restoreSelection();
+
+      if (command.startsWith('transform:')) {
+        removeSlashQuery(target);
+        const targetType = command.slice('transform:'.length);
+        const transformed = transformBlock(target, targetType);
+
+        if (targetType === 'divider') {
+          const paragraph = createBlock('paragraph', { indent: transformed.dataset.indent });
+          insertAfter(transformed, paragraph);
+          focusAtStart(getContentElement(paragraph));
+          emitChange();
         } else {
-            const top =
-                position === "before"
-                    ? rect.top
-                    : rect.bottom;
-
-            dropIndicatorElement.style.left =
-                `${rect.left + 28}px`;
-
-            dropIndicatorElement.style.top =
-                `${top - 1}px`;
-
-            dropIndicatorElement.style.width =
-                `${Math.max(
-                    40,
-                    rect.width - 32
-                )}px`;
+          focusAtStart(getContentElement(transformed));
         }
+      } else if (command.startsWith('insert:')) {
+        removeSlashQuery(target);
+        const targetType = command.slice('insert:'.length);
+        const inserted = insertBlock(targetType, target);
+        if (targetType === 'divider') {
+          const paragraph = createBlock('paragraph', { indent: inserted.dataset.indent });
+          insertAfter(inserted, paragraph);
+          focusAtStart(getContentElement(paragraph));
+          emitChange();
+        }
+      } else if (command.startsWith('toggle-title:')) {
+        setToggleTitleStyle(target, command.slice('toggle-title:'.length));
+        focusAtStart(getContentElement(target));
+      } else if (command === 'duplicate') {
+        duplicateBlock(target);
+      } else if (command === 'delete') {
+        deleteBlock(target);
+      } else if (command === 'move-up') {
+        moveBlock(target, 'up');
+      } else if (command === 'move-down') {
+        moveBlock(target, 'down');
+      }
+
+      activeMenuBlock = null;
+      onCloseMenu();
     }
 
-    /**
-     * Shows a small drag preview.
-     *
-     * @param {DragEvent} event
-     * @param {string} blockId
-     */
-    function showDragPreview(
-        event,
-        blockId
-    ) {
-        const location =
-            findBlockLocation(blockId);
+    function refreshNumberedMarkers(container = root) {
+      const children = [...container.children].filter((child) => child.classList?.contains('block'));
+      const counters = new Map();
 
-        if (!location) {
-            return;
+      children.forEach((block) => {
+        const type = block.dataset.type;
+        const indent = clampIndent(block.dataset.indent);
+
+        if (type === 'numbered-list') {
+          const key = String(indent);
+          const previous = counters.get(key) || 0;
+          const next = previous + 1;
+          counters.set(key, next);
+          const marker = block.querySelector(':scope > .block-main > .block-row > .list-marker');
+          if (marker) marker.textContent = `${next}.`;
+        } else {
+          [...counters.keys()]
+            .filter((key) => Number(key) >= indent)
+            .forEach((key) => counters.delete(key));
         }
 
-        const definition =
-            BLOCK_DEFINITION_MAP.get(
-                location.block.type
-            );
-
-        const text =
-            Storage.richTextToPlainText(
-                location.block.content
-            );
-
-        dragPreviewElement.textContent =
-            `${definition?.title || "Block"}: ${
-                text || "Empty block"
-            }`;
-
-        dragPreviewElement.hidden = false;
-
-        moveDragPreview(event);
+        if (type === 'toggle') {
+          const body = getToggleBody(block);
+          if (body) refreshNumberedMarkers(body);
+        }
+      });
     }
 
-    /**
-     * Moves the drag preview.
-     *
-     * @param {DragEvent} event
-     */
-    function moveDragPreview(event) {
-        if (
-            !dragPreviewElement ||
-            dragPreviewElement.hidden
-        ) {
-            return;
-        }
+    function readableDomain(hostname) {
+      const host = hostname.replace(/^www\./i, '').toLowerCase();
+      const known = {
+        'youtube.com': 'YouTube',
+        'youtu.be': 'YouTube',
+        'github.com': 'GitHub',
+        'linkedin.com': 'LinkedIn',
+        'wikipedia.org': 'Wikipedia',
+        'en.wikipedia.org': 'Wikipedia',
+        'google.com': 'Google',
+        'docs.google.com': 'Google Docs',
+        'drive.google.com': 'Google Drive',
+        'notion.so': 'Notion',
+        'reddit.com': 'Reddit',
+        'x.com': 'X',
+        'twitter.com': 'X'
+      };
 
-        dragPreviewElement.style.left =
-            `${event.clientX + 14}px`;
+      if (known[host]) return known[host];
 
-        dragPreviewElement.style.top =
-            `${event.clientY + 14}px`;
+      const mainPart = host.split('.').slice(-2, -1)[0] || host.split('.')[0] || host;
+      return mainPart
+        .split(/[-_]/)
+        .filter(Boolean)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
     }
 
-    /**
-     * Clears drag-related state.
-     */
-    function clearDragState() {
-        if (draggedBlockId) {
-            getBlockElement(
-                draggedBlockId
-            )?.classList.remove(
-                "is-dragging"
-            );
-        }
+    function readablePath(pathname) {
+      const specialPaths = {
+        '/feed/subscriptions': 'Subscriptions',
+        '/feed/history': 'History',
+        '/watch-later': 'Watch Later'
+      };
 
-        draggedBlockId = null;
-        dropTarget = null;
+      if (specialPaths[pathname]) return specialPaths[pathname];
 
-        if (dropIndicatorElement) {
-            dropIndicatorElement.hidden =
-                true;
-        }
+      const segments = pathname
+        .split('/')
+        .map((segment) => segment.trim())
+        .filter(Boolean);
 
-        if (dragPreviewElement) {
-            dragPreviewElement.hidden =
-                true;
-        }
+      if (!segments.length) return '';
+
+      const value = decodeURIComponent(segments[segments.length - 1])
+        .replace(/\.[a-z0-9]{2,5}$/i, '')
+        .replace(/[-_+]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!value || /^[a-zA-Z0-9_-]{18,}$/.test(value)) return '';
+
+      return value
+        .split(' ')
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
     }
 
-    // =========================================================================
-    // List numbering
-    // =========================================================================
-
-    /**
-     * Updates visible numbered-list markers.
-     */
-    function refreshListNumbers() {
-        function visit(container) {
-            let currentNumber = 0;
-
-            const blocks =
-                Array.from(
-                    container.children
-                ).filter(element =>
-                    element.classList.contains(
-                        "editor-block"
-                    )
-                );
-
-            for (const blockElement of blocks) {
-                const blockType =
-                    blockElement.dataset.blockType;
-
-                if (
-                    blockType ===
-                    "numbered-list"
-                ) {
-                    currentNumber += 1;
-
-                    const prefix =
-                        blockElement.querySelector(
-                            ":scope > .editor-block__body > .block-content-row > .block-prefix"
-                        );
-
-                    if (prefix) {
-                        prefix.dataset.listNumber =
-                            String(currentNumber);
-                    }
-                } else {
-                    currentNumber = 0;
-                }
-
-                const children =
-                    blockElement.querySelector(
-                        ":scope > .editor-block__body > .block-children"
-                    );
-
-                if (children) {
-                    visit(children);
-                }
-            }
-        }
-
-        visit(blockListElement);
+    function readableLinkLabel(rawUrl) {
+      try {
+        const parsed = new URL(rawUrl);
+        const domain = readableDomain(parsed.hostname);
+        const path = readablePath(parsed.pathname);
+        return path ? `${path} - ${domain}` : domain;
+      } catch {
+        return rawUrl;
+      }
     }
 
-    // =========================================================================
-    // Selection and caret helpers
-    // =========================================================================
-
-    /**
-     * Saves the current browser selection.
-     */
-    function saveCurrentSelection() {
-        const selection =
-            window.getSelection();
-
-        if (
-            selection &&
-            selection.rangeCount > 0
-        ) {
-            savedSelection =
-                selection
-                    .getRangeAt(0)
-                    .cloneRange();
-        }
+    function trimUrlPunctuation(rawUrl) {
+      const trailing = rawUrl.match(/[),.;!?]+$/)?.[0] || '';
+      return {
+        url: trailing ? rawUrl.slice(0, -trailing.length) : rawUrl,
+        trailing
+      };
     }
 
-    /**
-     * Restores the saved selection.
-     */
-    function restoreSavedSelection() {
-        if (!savedSelection) {
-            return;
-        }
+    function insertFragmentAtSelection(fragment) {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
 
-        const selection =
-            window.getSelection();
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      const lastNode = fragment.lastChild;
+      range.insertNode(fragment);
 
-        selection.removeAllRanges();
-        selection.addRange(savedSelection);
-    }
-
-    /**
-     * Focuses a block at a requested position.
-     *
-     * @param {string} blockId
-     * @param {number} [offset]
-     * @param {string} [position]
-     */
-    function focusBlock(
-        blockId,
-        offset,
-        position
-    ) {
-        const contentElement =
-            getContentElement(blockId);
-
-        if (!contentElement) {
-            return;
-        }
-
-        contentElement.focus();
-
-        let targetOffset =
-            typeof offset === "number"
-                ? offset
-                : (
-                    position === "start"
-                        ? 0
-                        : getContentTextLength(
-                            contentElement
-                        )
-                );
-
-        targetOffset = clamp(
-            targetOffset,
-            0,
-            getContentTextLength(
-                contentElement
-            )
-        );
-
-        setCaretOffset(
-            contentElement,
-            targetOffset
-        );
-    }
-
-    /**
-     * Returns the caret offset within an editable element.
-     *
-     * @param {HTMLElement} element
-     * @returns {number}
-     */
-    function getCaretOffset(element) {
-        const selection =
-            window.getSelection();
-
-        if (
-            !selection ||
-            selection.rangeCount === 0
-        ) {
-            return 0;
-        }
-
-        const range =
-            selection.getRangeAt(0);
-
-        if (
-            !element.contains(
-                range.startContainer
-            ) &&
-            range.startContainer !== element
-        ) {
-            return 0;
-        }
-
-        const clone =
-            range.cloneRange();
-
-        clone.selectNodeContents(element);
-        clone.setEnd(
-            range.startContainer,
-            range.startOffset
-        );
-
-        return clone.toString().length;
-    }
-
-    /**
-     * Sets the caret at a text offset.
-     *
-     * @param {HTMLElement} element
-     * @param {number} offset
-     */
-    function setCaretOffset(element, offset) {
-        const range =
-            document.createRange();
-
-        const selection =
-            window.getSelection();
-
-        let remaining = offset;
-        let targetNode = element;
-        let targetOffset = 0;
-
-        const walker =
-            document.createTreeWalker(
-                element,
-                NodeFilter.SHOW_TEXT
-            );
-
-        let node;
-
-        while (
-            (node = walker.nextNode())
-        ) {
-            if (
-                remaining <=
-                node.nodeValue.length
-            ) {
-                targetNode = node;
-                targetOffset = remaining;
-                break;
-            }
-
-            remaining -=
-                node.nodeValue.length;
-
-            targetNode = node;
-            targetOffset =
-                node.nodeValue.length;
-        }
-
-        range.setStart(
-            targetNode,
-            targetOffset
-        );
-
+      if (lastNode) {
+        range.setStartAfter(lastNode);
         range.collapse(true);
-
         selection.removeAllRanges();
         selection.addRange(range);
+      }
     }
 
-    /**
-     * Returns whether the browser selection is collapsed.
-     *
-     * @returns {boolean}
-     */
-    function isSelectionCollapsed() {
-        const selection =
-            window.getSelection();
+    function insertLinkedText(text) {
+      const fragment = document.createDocumentFragment();
+      let cursor = 0;
+      let match;
+      URL_PATTERN.lastIndex = 0;
 
-        return (
-            !selection ||
-            selection.isCollapsed
-        );
-    }
+      while ((match = URL_PATTERN.exec(text)) !== null) {
+        const { url, trailing } = trimUrlPunctuation(match[0]);
+        const start = match.index;
 
-    /**
-     * Returns the plain-text length of an editable.
-     *
-     * @param {HTMLElement} element
-     * @returns {number}
-     */
-    function getContentTextLength(element) {
-        return (
-            element.textContent || ""
-        ).length;
-    }
-
-    // =========================================================================
-    // Rich-text array helpers
-    // =========================================================================
-
-    /**
-     * Splits structured rich text at a plain-text offset.
-     *
-     * @param {*} content
-     * @param {number} offset
-     * @returns {{before:Array<Object>, after:Array<Object>}}
-     */
-    function splitRichTextAtOffset(
-        content,
-        offset
-    ) {
-        const segments =
-            Storage.normalizeRichText(content);
-
-        const before = [];
-        const after = [];
-
-        let consumed = 0;
-
-        for (const segment of segments) {
-            const start = consumed;
-            const end =
-                consumed +
-                segment.text.length;
-
-            if (end <= offset) {
-                before.push(
-                    cloneSegment(segment)
-                );
-            } else if (start >= offset) {
-                after.push(
-                    cloneSegment(segment)
-                );
-            } else {
-                const splitIndex =
-                    offset - start;
-
-                const firstText =
-                    segment.text.slice(
-                        0,
-                        splitIndex
-                    );
-
-                const secondText =
-                    segment.text.slice(
-                        splitIndex
-                    );
-
-                if (firstText) {
-                    before.push(
-                        createSegmentFrom(
-                            segment,
-                            firstText
-                        )
-                    );
-                }
-
-                if (secondText) {
-                    after.push(
-                        createSegmentFrom(
-                            segment,
-                            secondText
-                        )
-                    );
-                }
-            }
-
-            consumed = end;
+        if (start > cursor) {
+          fragment.append(document.createTextNode(text.slice(cursor, start)));
         }
 
-        return {
-            before:
-                Storage.normalizeRichText(
-                    before
-                ),
-            after:
-                Storage.normalizeRichText(
-                    after
-                )
-        };
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        anchor.textContent = readableLinkLabel(url);
+        fragment.append(anchor);
+
+        if (trailing) fragment.append(document.createTextNode(trailing));
+        cursor = start + match[0].length;
+      }
+
+      if (cursor < text.length) {
+        fragment.append(document.createTextNode(text.slice(cursor)));
+      }
+
+      insertFragmentAtSelection(fragment);
     }
 
-    /**
-     * Concatenates two rich-text collections.
-     *
-     * @param {*} first
-     * @param {*} second
-     * @returns {Array<Object>}
-     */
-    function concatenateRichText(
-        first,
-        second
-    ) {
-        return Storage.normalizeRichText([
-            ...Storage.normalizeRichText(
-                first
-            ),
-            ...Storage.normalizeRichText(
-                second
-            )
-        ]);
+    function handlePaste(event) {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection)) return;
+
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!text || !URL_PATTERN.test(text)) {
+        URL_PATTERN.lastIndex = 0;
+        return;
+      }
+      URL_PATTERN.lastIndex = 0;
+
+      event.preventDefault();
+
+      const matches = text.match(URL_PATTERN) || [];
+      const isSingleUrl = matches.length === 1 && text.trim() === matches[0];
+
+      if (isSingleUrl && selection && !selection.isCollapsed) {
+        document.execCommand('createLink', false, matches[0]);
+        root.querySelectorAll('a').forEach((anchor) => {
+          if (anchor.href === matches[0] || anchor.getAttribute('href') === matches[0]) {
+            anchor.target = '_blank';
+            anchor.rel = 'noopener noreferrer';
+          }
+        });
+      } else {
+        insertLinkedText(text);
+      }
+
+      emitChange();
     }
 
-    /**
-     * Clones one rich-text segment.
-     *
-     * @param {Object} segment
-     * @returns {Object}
-     */
-    function cloneSegment(segment) {
-        return createSegmentFrom(
-            segment,
-            segment.text
-        );
-    }
+    function migrateNode(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (!node.textContent.trim()) return [];
+        return [createBlock('paragraph', { html: escapeHtml(node.textContent) })];
+      }
 
-    /**
-     * Creates a segment preserving its marks.
-     *
-     * @param {Object} source
-     * @param {string} text
-     * @returns {Object}
-     */
-    function createSegmentFrom(
-        source,
-        text
-    ) {
-        const segment = { text };
+      if (!(node instanceof HTMLElement)) return [];
 
-        const marks =
-            Storage.normalizeMarks(
-                source.marks
-            );
+      if (node.classList.contains('block') && BLOCK_TYPES.has(node.dataset.type)) {
+        return [node];
+      }
 
-        if (marks.length > 0) {
-            segment.marks = marks;
-        }
+      if (node.matches('details.notion-toggle')) {
+        const titleSource = node.querySelector('summary .notion-toggle-title, summary');
+        const bodySource = node.querySelector('.notion-toggle-body');
+        const titleStyle = titleSource?.classList.contains('as-h1')
+          ? 'heading-1'
+          : titleSource?.classList.contains('as-h2')
+            ? 'heading-2'
+            : titleSource?.classList.contains('as-h3')
+              ? 'heading-3'
+              : 'paragraph';
 
-        return segment;
-    }
-
-    // =========================================================================
-    // Menu positioning
-    // =========================================================================
-
-    /**
-     * Positions a menu near the caret.
-     *
-     * @param {HTMLElement} menu
-     */
-    function positionMenuNearCaret(menu) {
-        const selection =
-            window.getSelection();
-
-        if (
-            !selection ||
-            selection.rangeCount === 0
-        ) {
-            return;
-        }
-
-        const range =
-            selection.getRangeAt(0);
-
-        let rect =
-            range.getBoundingClientRect();
-
-        if (
-            rect.width === 0 &&
-            rect.height === 0
-        ) {
-            const contentElement =
-                getClosestElement(
-                    range.startContainer,
-                    ".block-content"
-                );
-
-            rect =
-                contentElement
-                    ?.getBoundingClientRect() ||
-                rect;
-        }
-
-        positionMenuAtPoint(
-            menu,
-            rect.left,
-            rect.bottom + 6
-        );
-    }
-
-    /**
-     * Positions a menu near an element.
-     *
-     * @param {HTMLElement} menu
-     * @param {HTMLElement} anchor
-     */
-    function positionMenuNearElement(
-        menu,
-        anchor
-    ) {
-        const rect =
-            anchor.getBoundingClientRect();
-
-        positionMenuAtPoint(
-            menu,
-            rect.right + 6,
-            rect.top
-        );
-    }
-
-    /**
-     * Positions and clamps a menu in the viewport.
-     *
-     * @param {HTMLElement} menu
-     * @param {number} left
-     * @param {number} top
-     */
-    function positionMenuAtPoint(
-        menu,
-        left,
-        top
-    ) {
-        menu.hidden = false;
-
-        menu.style.left = "0px";
-        menu.style.top = "0px";
-
-        const rect =
-            menu.getBoundingClientRect();
-
-        let nextLeft =
-            clamp(
-                left,
-                8,
-                window.innerWidth -
-                    rect.width -
-                    8
-            );
-
-        let nextTop =
-            top;
-
-        if (
-            nextTop + rect.height >
-            window.innerHeight - 8
-        ) {
-            nextTop =
-                Math.max(
-                    8,
-                    window.innerHeight -
-                        rect.height -
-                        8
-                );
-        }
-
-        menu.style.left =
-            `${nextLeft}px`;
-
-        menu.style.top =
-            `${nextTop}px`;
-    }
-
-    /**
-     * Closes all editor menus.
-     */
-    function closeAllMenus() {
-        closeSlashMenu();
-
-        const menus = [
-            blockMenuElement,
-            blockTypeMenuElement,
-            contextMenuElement
-        ];
-
-        for (const menu of menus) {
-            if (menu) {
-                menu.hidden = true;
-            }
-        }
-
-        document
-            .querySelectorAll(
-                ".block-handle[aria-expanded='true']"
-            )
-            .forEach(handle => {
-                handle.setAttribute(
-                    "aria-expanded",
-                    "false"
-                );
-            });
-
-        activeMenuBlockId = null;
-    }
-
-    // =========================================================================
-    // DOM helpers
-    // =========================================================================
-
-    /**
-     * Returns a rendered block element.
-     *
-     * @param {string} blockId
-     * @returns {HTMLElement|null}
-     */
-    function getBlockElement(blockId) {
-        return blockListElement.querySelector(
-            `.editor-block[data-block-id="${escapeSelector(
-                blockId
-            )}"]`
-        );
-    }
-
-    /**
-     * Returns a block's content element.
-     *
-     * @param {string} blockId
-     * @returns {HTMLElement|null}
-     */
-    function getContentElement(blockId) {
-        return blockListElement.querySelector(
-            `.block-content[data-block-id="${escapeSelector(
-                blockId
-            )}"]`
-        );
-    }
-
-    /**
-     * Escapes a CSS selector value.
-     *
-     * @param {string} value
-     * @returns {string}
-     */
-    function escapeSelector(value) {
-        if (
-            window.CSS &&
-            typeof window.CSS.escape ===
-                "function"
-        ) {
-            return window.CSS.escape(value);
-        }
-
-        return String(value).replace(
-            /["\\]/g,
-            "\\$&"
-        );
-    }
-
-    /**
-     * Finds the closest matching element from a node.
-     *
-     * @param {Node} node
-     * @param {string} selector
-     * @returns {HTMLElement|null}
-     */
-    function getClosestElement(
-        node,
-        selector
-    ) {
-        const element =
-            node?.nodeType ===
-            Node.ELEMENT_NODE
-                ? node
-                : node?.parentElement;
-
-        return element?.closest(selector) ||
-            null;
-    }
-
-    /**
-     * Restricts a number to a range.
-     *
-     * @param {number} value
-     * @param {number} minimum
-     * @param {number} maximum
-     * @returns {number}
-     */
-    function clamp(
-        value,
-        minimum,
-        maximum
-    ) {
-        return Math.min(
-            Math.max(value, minimum),
-            maximum
-        );
-    }
-
-    // =========================================================================
-    // Document access
-    // =========================================================================
-
-    /**
-     * Replaces the current document.
-     *
-     * @param {*} nextDocument
-     */
-    function setDocument(nextDocument) {
-        documentModel =
-            Storage.normalizeDocument(
-                nextDocument
-            );
-
-        render();
-    }
-
-    /**
-     * Returns a safe copy of the current document.
-     *
-     * @returns {Object}
-     */
-    function getDocument() {
-        synchronizeAllBlocks();
-
-        return Storage.cloneDocument(
-            documentModel
-        );
-    }
-
-    /**
-     * Focuses the first block.
-     */
-    function focusFirstBlock() {
-        const firstBlock =
-            documentModel.blocks[0];
-
-        if (firstBlock) {
-            focusBlock(
-                firstBlock.id,
-                0
-            );
-        }
-    }
-
-    // =========================================================================
-    // Public API
-    // =========================================================================
-
-    const publicApi =
-        Object.freeze({
-            initialize,
-            render,
-            getDocument,
-            setDocument,
-            appendBlock,
-            focusFirstBlock,
-            focusBlock,
-            closeMenus: closeAllMenus,
-            synchronize: synchronizeAllBlocks
+        const children = [];
+        [...(bodySource?.childNodes || [])].forEach((child) => {
+          children.push(...migrateNode(child));
         });
 
-    window.NoteUEditor =
-        publicApi;
+        return [createBlock('toggle', {
+          html: titleSource?.innerHTML || '<br>',
+          titleStyle,
+          open: node.open,
+          children
+        })];
+      }
+
+      if (node.matches('ul, ol')) {
+        const type = node.tagName === 'UL' ? 'bulleted-list' : 'numbered-list';
+        return [...node.children]
+          .filter((child) => child.tagName === 'LI')
+          .map((item) => createBlock(type, { html: item.innerHTML }));
+      }
+
+      if (node.classList.contains('todo-item')) {
+        const text = node.querySelector('.todo-text')?.innerHTML || node.textContent || '';
+        const checked = node.querySelector('input[type="checkbox"]')?.checked
+          || node.classList.contains('completed');
+        return [createBlock('checklist', { html: text, checked })];
+      }
+
+      const typeMap = {
+        H1: 'heading-1',
+        H2: 'heading-2',
+        H3: 'heading-3',
+        BLOCKQUOTE: 'quote',
+        PRE: 'code',
+        HR: 'divider'
+      };
+
+      const mappedType = typeMap[node.tagName] || 'paragraph';
+      return [createBlock(mappedType, {
+        html: node.innerHTML,
+        text: mappedType === 'code' ? node.textContent : undefined
+      })];
+    }
+
+    function deserializeBlockData(data) {
+      const type = normalizeType(data?.type);
+      const children = type === 'toggle' && Array.isArray(data?.children)
+        ? data.children.map(deserializeBlockData)
+        : [];
+
+      return createBlock(type, {
+        indent: data?.indent || 0,
+        html: data?.html || '<br>',
+        text: data?.text || '',
+        checked: data?.checked === true,
+        titleStyle: data?.titleStyle || 'paragraph',
+        open: data?.open !== false,
+        children
+      });
+    }
+
+    function serializeBlockData(block) {
+      const type = normalizeType(block?.dataset.type);
+      const indent = clampIndent(block?.dataset.indent);
+      const result = { type };
+
+      if (indent > 0) result.indent = indent;
+
+      if (type === 'divider') return result;
+
+      const content = getContentElement(block);
+      if (type === 'code') {
+        const text = content?.textContent || '';
+        if (text) result.text = text;
+        return result;
+      }
+
+      const html = content?.innerHTML === '<br>' ? '' : content?.innerHTML || '';
+      if (html) result.html = html;
+
+      if (type === 'checklist' && block.dataset.checked === 'true') {
+        result.checked = true;
+      }
+
+      if (type === 'toggle') {
+        const titleStyle = content?.dataset.titleStyle || 'paragraph';
+        if (titleStyle !== 'paragraph') result.titleStyle = titleStyle;
+        if (block.dataset.open === 'false') result.open = false;
+
+        const body = getToggleBody(block);
+        const children = [...(body?.children || [])]
+          .filter((child) => child.classList?.contains('block'))
+          .map(serializeBlockData);
+        if (children.length) result.children = children;
+      }
+
+      return result;
+    }
+
+    function normalizeLoadedBlocks() {
+      const existingTopBlocks = [...root.children].filter((child) => child.classList?.contains('block'));
+
+      if (existingTopBlocks.length === root.children.length && existingTopBlocks.length > 0) {
+        root.querySelectorAll('.block').forEach((block) => {
+          block.dataset.type = normalizeType(block.dataset.type);
+          block.dataset.indent = String(clampIndent(block.dataset.indent));
+          block.dataset.blockId = block.dataset.blockId || nextBlockId();
+          block.draggable = false;
+          block.classList.remove('dragging', 'drag-target-before', 'drag-target-after');
+
+          if (!block.querySelector(':scope > .block-handle')) {
+            block.prepend(createHandle());
+          }
+
+          if (block.dataset.type === 'toggle') {
+            block.dataset.open = block.dataset.open === 'false' ? 'false' : 'true';
+            const title = getContentElement(block);
+            if (title) title.dataset.titleStyle = title.dataset.titleStyle || 'paragraph';
+          }
+
+          if (block.dataset.type === 'checklist') {
+            const checkbox = block.querySelector('input[type="checkbox"]');
+            const checked = block.dataset.checked === 'true';
+            if (checkbox) checkbox.checked = checked;
+          }
+        });
+        return;
+      }
+
+      const nodes = [...root.childNodes];
+      root.replaceChildren();
+      nodes.forEach((node) => {
+        migrateNode(node).forEach((block) => root.append(block));
+      });
+    }
+
+    function load(value = '') {
+      suppressChange = true;
+      try {
+        root.replaceChildren();
+
+        if (Array.isArray(value)) {
+          value.forEach((blockData) => root.append(deserializeBlockData(blockData)));
+        } else {
+          root.innerHTML = typeof value === 'string' ? value : '';
+          normalizeLoadedBlocks();
+        }
+
+        ensureRootHasBlock();
+        refreshNumberedMarkers();
+        updateEmptyState();
+      } finally {
+        suppressChange = false;
+      }
+    }
+
+    function serialize() {
+      return [...root.children]
+        .filter((child) => child.classList?.contains('block'))
+        .map(serializeBlockData);
+    }
+
+    function clearDragIndicators() {
+      root.querySelectorAll('.drag-target-before, .drag-target-after').forEach((block) => {
+        block.classList.remove('drag-target-before', 'drag-target-after');
+      });
+      dragTargetBlock = null;
+      dragTargetPosition = null;
+    }
+
+    root.addEventListener('keydown', (event) => {
+      if (handleSelectAll(event)) return;
+      if (handleDeleteWholeNote(event)) return;
+      if (event.key === 'Enter' && handleEnter(event)) return;
+      if (event.key === 'Tab' && handleTab(event)) return;
+      if (event.key === 'Backspace' && handleBackspace(event)) return;
+    }, { capture: true, signal });
+
+    root.addEventListener('input', (event) => {
+      const block = getBlockFromNode(event.target);
+      const content = event.target.closest?.('[data-block-content]');
+      if (!block || !content) {
+        ensureRootHasBlock();
+        emitChange();
+        return;
+      }
+
+      const text = getPlainText(content);
+
+      if (block.dataset.type === 'code') {
+        onCloseMenu();
+        emitChange();
+        return;
+      }
+
+      if (applyShortcut(block, content, text)) return;
+
+      updateSlashMenu(block, content);
+      emitChange();
+    }, { signal });
+
+    root.addEventListener('paste', handlePaste, { signal });
+
+    root.addEventListener('change', (event) => {
+      const checkbox = event.target.closest?.('input[type="checkbox"]');
+      if (!checkbox) return;
+      const block = checkbox.closest('.block[data-type="checklist"]');
+      if (!block) return;
+      block.dataset.checked = checkbox.checked ? 'true' : 'false';
+      emitChange();
+    }, { signal });
+
+    root.addEventListener('click', (event) => {
+      const caret = event.target.closest?.('[data-toggle-caret]');
+      if (caret) {
+        const block = caret.closest('.block[data-type="toggle"]');
+        block.dataset.open = block.dataset.open === 'true' ? 'false' : 'true';
+        emitChange();
+        return;
+      }
+
+      const handle = event.target.closest?.('[data-drag-handle]');
+      if (handle) {
+        event.preventDefault();
+        const block = handle.closest('.block');
+        activeMenuBlock = block;
+        saveSelection();
+        const rect = handle.getBoundingClientRect();
+        onRequestMenu({
+          mode: 'context',
+          block,
+          query: '',
+          x: rect.left,
+          y: rect.bottom + 5
+        });
+      }
+    }, { signal });
+
+    root.addEventListener('contextmenu', (event) => {
+      const block = event.target.closest?.('.block');
+      if (!block) return;
+      event.preventDefault();
+      activeMenuBlock = block;
+      saveSelection();
+      onRequestMenu({
+        mode: 'context',
+        block,
+        query: '',
+        x: event.clientX,
+        y: event.clientY
+      });
+    }, { signal });
+
+    root.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      const handle = event.target.closest?.('[data-drag-handle]');
+      armedDragBlock = null;
+
+      if (handle) {
+        const block = handle.closest('.block');
+        block.draggable = true;
+        block.setAttribute('aria-grabbed', 'true');
+        armedDragBlock = block;
+      }
+    }, { capture: true, signal });
+
+    root.addEventListener('dragstart', (event) => {
+      const block = event.target.closest?.('.block');
+      if (!armedDragBlock || block !== armedDragBlock) {
+        event.preventDefault();
+        return;
+      }
+
+      draggedBlock = block;
+      draggedBlock.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', draggedBlock.dataset.blockId);
+    }, { capture: true, signal });
+
+    root.addEventListener('dragover', (event) => {
+      if (!draggedBlock) return;
+      const target = event.target.closest?.('.block');
+      if (!target || target === draggedBlock || target.contains(draggedBlock) || draggedBlock.contains(target)) return;
+
+      event.preventDefault();
+      clearDragIndicators();
+
+      const rect = target.getBoundingClientRect();
+      const position = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+      target.classList.add(position === 'before' ? 'drag-target-before' : 'drag-target-after');
+      dragTargetBlock = target;
+      dragTargetPosition = position;
+    }, { signal });
+
+    root.addEventListener('drop', (event) => {
+      if (!draggedBlock || !dragTargetBlock) return;
+      event.preventDefault();
+
+      if (dragTargetPosition === 'before') {
+        dragTargetBlock.insertAdjacentElement('beforebegin', draggedBlock);
+      } else {
+        dragTargetBlock.insertAdjacentElement('afterend', draggedBlock);
+      }
+
+      clearDragIndicators();
+      refreshNumberedMarkers();
+      emitChange();
+    }, { signal });
+
+    const disarmDrag = () => {
+      clearDragIndicators();
+      if (armedDragBlock) {
+        armedDragBlock.draggable = false;
+        armedDragBlock.removeAttribute('aria-grabbed');
+      }
+      if (draggedBlock) draggedBlock.classList.remove('dragging');
+      armedDragBlock = null;
+      draggedBlock = null;
+    };
+
+    root.addEventListener('dragend', disarmDrag, { signal });
+    root.addEventListener('pointerup', () => {
+      if (!draggedBlock) disarmDrag();
+    }, { signal });
+    root.addEventListener('pointercancel', disarmDrag, { signal });
+
+    document.addEventListener('selectionchange', () => {
+      const selection = window.getSelection();
+      if (selectionInsideRoot(selection)) {
+        saveSelection();
+        onSelectionChange(selection);
+      } else {
+        onSelectionChange(null);
+      }
+    }, { signal });
+
+    load('');
+
+    return Object.freeze({
+      root,
+      load,
+      serialize,
+      focus() {
+        const block = ensureCaretBlock();
+        focusAtEnd(getContentElement(block));
+      },
+      getCurrentBlock,
+      getContentElement,
+      getToggleBody,
+      saveSelection,
+      restoreSelection,
+      createBlock,
+      insertBlock,
+      transformBlock,
+      setToggleTitleStyle,
+      duplicateBlock,
+      deleteBlock,
+      moveBlock,
+      executeMenuCommand,
+      readableLinkLabel,
+      destroy() {
+        abortController.abort();
+      }
+    });
+  }
+
+  window.NoteEditor = Object.freeze({
+    BLOCK_TYPES,
+    create: createEditor
+  });
 })();
