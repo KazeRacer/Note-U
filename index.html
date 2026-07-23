@@ -38,8 +38,8 @@
         </div>
     </noscript>
 
-    <div id="app" class="app-shell">
-        <header class="topbar">
+    <div id="app" class="app-shell" data-loading="true">
+        <header id="topbar" class="topbar">
             <div class="topbar__inner">
                 <a
                     class="brand"
@@ -56,6 +56,7 @@
                         class="save-status"
                         role="status"
                         aria-live="polite"
+                        data-state="idle"
                     >
                         Pronto
                     </p>
@@ -108,6 +109,7 @@
                             type="button"
                             aria-label="Cambia icona del documento"
                             aria-haspopup="dialog"
+                            aria-controls="emoji-popover"
                             aria-expanded="false"
                         >
                             <span
@@ -159,9 +161,7 @@
         </main>
 
         <footer class="app-footer">
-            <p>
-                Tutto il documento vive nel link.
-            </p>
+            <p>Tutto il documento vive nel link.</p>
         </footer>
     </div>
 
