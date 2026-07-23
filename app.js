@@ -124,15 +124,15 @@
         const blockListElement =
             document.getElementById("block-list");
 
-        const paragraphTemplate =
-            document.getElementById(
-                "paragraph-block-template"
-            );
+const blockTemplate =
+    document.getElementById(
+        "block-template"
+    );
 
         window.NoteUEditor.initialize({
             editorRoot,
             blockListElement,
-            paragraphTemplate,
+            blockTemplate,
             documentModel: currentDocument,
             onChange: handleEditorChange
         });
