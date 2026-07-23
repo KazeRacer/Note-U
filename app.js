@@ -71,27 +71,21 @@
     }
 
     /**
-     * Validates required global modules.
+     * Validates required global modules and DOM elements.
      */
     function validateDependencies() {
         const missingDependencies = [];
 
         if (!window.NoteUStorage) {
-            missingDependencies.push(
-                "NoteUStorage"
-            );
+            missingDependencies.push("NoteUStorage");
         }
 
         if (!window.NoteUEditor) {
-            missingDependencies.push(
-                "NoteUEditor"
-            );
+            missingDependencies.push("NoteUEditor");
         }
 
         if (!window.NoteUUI) {
-            missingDependencies.push(
-                "NoteUUI"
-            );
+            missingDependencies.push("NoteUUI");
         }
 
         if (missingDependencies.length > 0) {
@@ -151,10 +145,13 @@
     function initializeInterface() {
         window.NoteUUI.initialize({
             documentModel: currentDocument,
+
             onDocumentChange:
                 handleInterfaceDocumentChange,
+
             onNewNote:
                 createNewNote,
+
             onCopyLink:
                 createCurrentDocumentUrl
         });
@@ -199,17 +196,24 @@
             return;
         }
 
-        const metadataDocument =
-            window.NoteUUI.getDocument();
+        try {
+            const metadataDocument =
+                window.NoteUUI.getDocument();
 
-        currentDocument =
-            window.NoteUStorage.normalizeDocument({
-                ...editorDocument,
-                title: metadataDocument.title,
-                icon: metadataDocument.icon
-            });
+            currentDocument =
+                window.NoteUStorage.normalizeDocument({
+                    ...editorDocument,
+                    title: metadataDocument.title,
+                    icon: metadataDocument.icon
+                });
 
-        scheduleSave();
+            scheduleSave();
+        } catch (error) {
+            handleSaveError(
+                error,
+                "The editor change could not be processed"
+            );
+        }
     }
 
     /**
@@ -224,17 +228,24 @@
             return;
         }
 
-        const editorDocument =
-            window.NoteUEditor.getDocument();
+        try {
+            const editorDocument =
+                window.NoteUEditor.getDocument();
 
-        currentDocument =
-            window.NoteUStorage.normalizeDocument({
-                ...editorDocument,
-                title: interfaceDocument.title,
-                icon: interfaceDocument.icon
-            });
+            currentDocument =
+                window.NoteUStorage.normalizeDocument({
+                    ...editorDocument,
+                    title: interfaceDocument.title,
+                    icon: interfaceDocument.icon
+                });
 
-        scheduleSave();
+            scheduleSave();
+        } catch (error) {
+            handleSaveError(
+                error,
+                "The note metadata could not be processed"
+            );
+        }
     }
 
     /**
@@ -279,9 +290,7 @@
         window.NoteUUI.showSavingStatus();
 
         saveTimer = window.setTimeout(
-            () => {
-                saveCurrentDocument();
-            },
+            saveCurrentDocument,
             SAVE_DELAY
         );
     }
@@ -336,7 +345,17 @@
                     }
                 );
 
+            if (
+                typeof nextUrl !== "string" ||
+                nextUrl.length === 0
+            ) {
+                throw new Error(
+                    "The storage module returned an invalid URL."
+                );
+            }
+
             lastSavedUrl = nextUrl;
+
             lastSavedDocumentSignature =
                 documentSignature;
 
@@ -344,12 +363,10 @@
 
             return nextUrl;
         } catch (error) {
-            console.error(
-                "Note-U could not save the document.",
-                error
+            handleSaveError(
+                error,
+                "Save failed"
             );
-
-            window.NoteUUI.showSaveError();
 
             return window.location.href;
         } finally {
@@ -366,35 +383,54 @@
         clearTimeout(saveTimer);
         saveTimer = null;
 
-        synchronizeApplicationDocument();
+        try {
+            synchronizeApplicationDocument();
 
-        const url =
-            window.NoteUStorage.createDocumentUrl(
-                currentDocument
+            const url =
+                window.NoteUStorage.createDocumentUrl(
+                    currentDocument
+                );
+
+            if (
+                typeof url !== "string" ||
+                url.length === 0
+            ) {
+                throw new Error(
+                    "The storage module returned an invalid share URL."
+                );
+            }
+
+            const documentSignature =
+                createDocumentSignature(
+                    currentDocument
+                );
+
+            if (url !== window.location.href) {
+                window.history.replaceState(
+                    {
+                        noteU: true
+                    },
+                    "",
+                    url
+                );
+            }
+
+            lastSavedUrl = url;
+
+            lastSavedDocumentSignature =
+                documentSignature;
+
+            window.NoteUUI.showSavedStatus();
+
+            return url;
+        } catch (error) {
+            handleSaveError(
+                error,
+                "The share link could not be created"
             );
 
-        const documentSignature =
-            createDocumentSignature(
-                currentDocument
-            );
-
-        if (url !== window.location.href) {
-            window.history.replaceState(
-                {
-                    noteU: true
-                },
-                "",
-                url
-            );
+            throw error;
         }
-
-        lastSavedUrl = url;
-        lastSavedDocumentSignature =
-            documentSignature;
-
-        window.NoteUUI.showSavedStatus();
-
-        return url;
     }
 
     /**
@@ -406,10 +442,13 @@
     function createDocumentSignature(
         documentModel
     ) {
-        return JSON.stringify(
+        const normalizedDocument =
             window.NoteUStorage.normalizeDocument(
                 documentModel
-            )
+            );
+
+        return JSON.stringify(
+            normalizedDocument
         );
     }
 
@@ -424,6 +463,37 @@
             createDocumentSignature(
                 currentDocument
             );
+    }
+
+    /**
+     * Displays and logs a save-related error.
+     *
+     * @param {*} error
+     * @param {string} fallbackMessage
+     */
+    function handleSaveError(
+        error,
+        fallbackMessage
+    ) {
+        console.error(
+            "Note-U save error:",
+            error
+        );
+
+        const errorMessage =
+            error instanceof Error &&
+            error.message
+                ? error.message
+                : fallbackMessage;
+
+        const visibleMessage =
+            errorMessage.length <= 80
+                ? errorMessage
+                : fallbackMessage;
+
+        window.NoteUUI.showSaveError(
+            visibleMessage
+        );
     }
 
     // =========================================================================
@@ -525,27 +595,30 @@
         clearTimeout(saveTimer);
         saveTimer = null;
 
-        const nextDocument =
-            window.NoteUStorage.loadDocumentFromUrl();
-
-        const nextSignature =
-            createDocumentSignature(
-                nextDocument
-            );
-
-        if (
-            nextSignature ===
-            createDocumentSignature(
-                currentDocument
-            )
-        ) {
-            updateSavedState();
-            return;
-        }
-
-        isApplyingExternalDocument = true;
-
         try {
+            const nextDocument =
+                window.NoteUStorage.loadDocumentFromUrl();
+
+            const nextSignature =
+                createDocumentSignature(
+                    nextDocument
+                );
+
+            const currentSignature =
+                createDocumentSignature(
+                    currentDocument
+                );
+
+            if (
+                nextSignature ===
+                currentSignature
+            ) {
+                updateSavedState();
+                return;
+            }
+
+            isApplyingExternalDocument = true;
+
             currentDocument = nextDocument;
 
             window.NoteUEditor.setDocument(
@@ -643,20 +716,27 @@
                 "alert"
             );
 
-            errorMessage.style.padding = "20px";
+            errorMessage.style.padding =
+                "20px";
+
             errorMessage.style.border =
                 "1px solid #dfdfdc";
+
             errorMessage.style.borderRadius =
                 "10px";
+
             errorMessage.style.background =
                 "#ffffff";
+
             errorMessage.style.color =
                 "#c64242";
 
             errorMessage.textContent =
                 "Note-U could not start. Refresh the page or open a new note.";
 
-            editor.replaceChildren(errorMessage);
+            editor.replaceChildren(
+                errorMessage
+            );
         }
     }
 
