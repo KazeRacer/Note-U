@@ -4,13 +4,696 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-visual">
   <meta name="color-scheme" content="light">
+  <meta name="application-version" content="0.4.1-single-file">
   <title>Note</title>
   <link
     id="favicon"
     rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%8F%EF%B8%8F%3C/text%3E%3C/svg%3E"
   >
-  <link rel="stylesheet" href="styles.css">
+  <style>
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  --page-width: 760px;
+  --icon-column-width: 42px;
+  --column-gap: 18px;
+  --indent-step: 20px;
+  --text-main: #37352f;
+  --text-muted: rgba(55, 53, 47, 0.48);
+  --text-faint: rgba(55, 53, 47, 0.28);
+  --background: #ffffff;
+  --hover: rgba(55, 53, 47, 0.06);
+  --active: rgba(55, 53, 47, 0.09);
+  --border: rgba(55, 53, 47, 0.11);
+  --selection: rgba(35, 131, 226, 0.24);
+  --blue: #2383e2;
+  --code-background: #f7f6f3;
+  --menu-shadow: 0 14px 38px rgba(15, 15, 15, 0.14), 0 2px 8px rgba(15, 15, 15, 0.07);
+  --title-size: 36px;
+  --title-weight: 700;
+  --title-line-height: 1.15;
+  --title-letter-spacing: -0.025em;
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  margin: 0;
+  min-width: 300px;
+  color: var(--text-main);
+  background: var(--background);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+::selection {
+  background: var(--selection);
+}
+
+.page-shell {
+  width: min(calc(100% - 32px), var(--page-width));
+  margin: 0 auto;
+  padding: 26px 0 120px;
+}
+
+.page-grid {
+  display: grid;
+  grid-template-columns: var(--icon-column-width) minmax(0, 1fr);
+  column-gap: var(--column-gap);
+}
+
+.top-row {
+  margin-bottom: 30px;
+}
+
+.top-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.button {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.button-secondary {
+  color: rgba(55, 53, 47, 0.66);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.button:hover {
+  color: var(--text-main);
+  background: var(--hover);
+  border-color: rgba(55, 53, 47, 0.18);
+}
+
+.note-header {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.icon-column {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.note-icon-button {
+  width: 42px;
+  height: 42px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 31px;
+  line-height: 1;
+  user-select: none;
+}
+
+.note-icon-button:hover,
+.note-icon-button[aria-expanded="true"] {
+  background: var(--hover);
+}
+
+.icon-picker {
+  position: absolute;
+  top: 48px;
+  left: 0;
+  z-index: 1000;
+  display: grid;
+  grid-template-columns: repeat(6, 32px);
+  gap: 3px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+  box-shadow: var(--menu-shadow);
+}
+
+.icon-picker[hidden] {
+  display: none;
+}
+
+.icon-picker button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.icon-picker button:hover {
+  background: var(--hover);
+}
+
+.note-title,
+.editor .block[data-type="heading-1"] .block-content,
+.editor .toggle-title[data-title-style="heading-1"] {
+  font-size: var(--title-size);
+  font-weight: var(--title-weight);
+  line-height: var(--title-line-height);
+  letter-spacing: var(--title-letter-spacing);
+}
+
+.note-title {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text-main);
+  background: transparent;
+}
+
+.note-title::placeholder {
+  color: var(--text-faint);
+}
+
+.editor-column {
+  position: relative;
+}
+
+.editor {
+  position: relative;
+  width: 100%;
+  min-height: 62vh;
+  outline: none;
+  color: var(--text-main);
+  font-size: 16px;
+  line-height: 1.55;
+  caret-color: var(--text-main);
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.editor.is-empty::before {
+  content: attr(data-placeholder);
+  position: absolute;
+  top: 2px;
+  left: 0;
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.editor,
+.editor *:not(button):not(input) {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.block {
+  --block-indent: 0;
+  position: relative;
+  display: block;
+  min-height: 28px;
+  margin-left: calc(var(--block-indent) * var(--indent-step));
+  border-radius: 5px;
+}
+
+.block[data-indent="1"] { --block-indent: 1; }
+.block[data-indent="2"] { --block-indent: 2; }
+.block[data-indent="3"] { --block-indent: 3; }
+.block[data-indent="4"] { --block-indent: 4; }
+.block[data-indent="5"] { --block-indent: 5; }
+.block[data-indent="6"] { --block-indent: 6; }
+.block[data-indent="7"] { --block-indent: 7; }
+.block[data-indent="8"] { --block-indent: 8; }
+
+.block:hover > .block-handle,
+.block:focus-within > .block-handle {
+  opacity: 1;
+}
+
+.block-handle {
+  position: absolute;
+  top: 2px;
+  left: -24px;
+  width: 20px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-faint);
+  background: transparent;
+  cursor: grab;
+  opacity: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.block-handle:hover,
+.block-handle[aria-expanded="true"] {
+  color: var(--text-main);
+  background: var(--hover);
+}
+
+.block-handle:active {
+  cursor: grabbing;
+}
+
+.block-main {
+  min-width: 0;
+}
+
+.block-row {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.block-content,
+.toggle-title {
+  min-width: 0;
+  flex: 1;
+  outline: none;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.block-content:empty::before,
+.toggle-title:empty::before {
+  content: "\200B";
+}
+
+.editor mark {
+  padding: 0 2px;
+  border-radius: 3px;
+  color: inherit;
+  background: #fff2ac;
+}
+
+.block[data-type="paragraph"] {
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+
+.block[data-type="heading-1"] {
+  margin-top: 24px;
+  margin-bottom: 8px;
+}
+
+.block[data-type="heading-1"]:first-child {
+  margin-top: 0;
+}
+
+.block[data-type="heading-2"] {
+  margin-top: 20px;
+  margin-bottom: 6px;
+}
+
+.block[data-type="heading-2"] .block-content,
+.toggle-title[data-title-style="heading-2"] {
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.25;
+  letter-spacing: -0.018em;
+}
+
+.block[data-type="heading-3"] {
+  margin-top: 15px;
+  margin-bottom: 4px;
+}
+
+.block[data-type="heading-3"] .block-content,
+.toggle-title[data-title-style="heading-3"] {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.list-marker,
+.check-marker {
+  flex: 0 0 20px;
+  width: 20px;
+  color: var(--text-main);
+  text-align: left;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.list-marker {
+  padding-top: 1px;
+}
+
+.block[data-type="numbered-list"] .list-marker {
+  flex-basis: 28px;
+  width: 28px;
+  padding-right: 4px;
+  text-align: right;
+}
+
+.check-marker {
+  display: flex;
+  align-items: flex-start;
+  padding-top: 4px;
+}
+
+.check-marker input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--blue);
+  cursor: pointer;
+  user-select: none;
+}
+
+.block[data-checked="true"] .block-content {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.block[data-type="quote"] .block-main {
+  margin: 4px 0;
+  padding: 5px 10px;
+  border-left: 3px solid rgba(55, 53, 47, 0.72);
+}
+
+.block[data-type="code"] {
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+
+.block[data-type="code"] .block-main {
+  overflow: hidden;
+  border-radius: 7px;
+  background: var(--code-background);
+}
+
+.code-content {
+  display: block;
+  min-height: 24px;
+  margin: 0;
+  padding: 10px 12px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: normal;
+}
+
+.block[data-type="divider"] {
+  min-height: 25px;
+  margin-top: 5px;
+  margin-bottom: 5px;
+}
+
+.block[data-type="divider"] .block-main {
+  padding: 12px 0;
+}
+
+.block-divider {
+  width: 100%;
+  height: 1px;
+  border: 0;
+  background: var(--border);
+}
+
+.toggle-row {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.toggle-caret {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+  transform-origin: center;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.toggle-caret:hover {
+  color: var(--text-main);
+  background: var(--hover);
+}
+
+.block[data-open="true"] .toggle-caret {
+  transform: rotate(90deg);
+}
+
+.toggle-title {
+  min-height: 24px;
+}
+
+.toggle-body {
+  display: none;
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+
+.block[data-open="true"] .toggle-body {
+  display: block;
+}
+
+.toggle-body > .block {
+  margin-left: calc(var(--block-indent) * var(--indent-step));
+}
+
+.block-menu {
+  position: fixed;
+  z-index: 3000;
+  width: 292px;
+  max-height: min(440px, calc(100vh - 24px));
+  padding: 6px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--background);
+  box-shadow: var(--menu-shadow);
+}
+
+.block-menu[hidden] {
+  display: none;
+}
+
+.menu-section + .menu-section {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border);
+}
+
+.menu-label {
+  padding: 5px 8px 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 5px 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.menu-item:hover,
+.menu-item.is-selected {
+  background: var(--hover);
+}
+
+.menu-icon {
+  display: grid;
+  flex: 0 0 30px;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: rgba(55, 53, 47, 0.75);
+  background: rgba(55, 53, 47, 0.025);
+  font-size: 12px;
+  font-weight: 650;
+  user-select: none;
+}
+
+.menu-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.menu-title {
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-description {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-chevron {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.inline-toolbar {
+  position: fixed;
+  z-index: 2900;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--background);
+  box-shadow: var(--menu-shadow);
+}
+
+.inline-toolbar[hidden] {
+  display: none;
+}
+
+.inline-toolbar button {
+  min-width: 30px;
+  height: 29px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.inline-toolbar button:hover {
+  background: var(--hover);
+}
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 4000;
+  max-width: min(360px, calc(100vw - 36px));
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-main);
+  background: var(--background);
+  box-shadow: var(--menu-shadow);
+  font-size: 12px;
+}
+
+.toast[hidden] {
+  display: none;
+}
+
+.dragging {
+  opacity: 0.45;
+}
+
+.drag-target-before::before,
+.drag-target-after::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--blue);
+}
+
+.drag-target-before::before {
+  top: -1px;
+}
+
+.drag-target-after::after {
+  bottom: -1px;
+}
+
+@media (max-width: 700px) {
+  :root {
+    --icon-column-width: 38px;
+    --column-gap: 12px;
+    --title-size: 32px;
+    --indent-step: 17px;
+  }
+
+  .page-shell {
+    width: min(calc(100% - 24px), var(--page-width));
+    padding-top: 16px;
+  }
+
+  .top-row {
+    margin-bottom: 24px;
+  }
+
+  .note-icon-button {
+    width: 38px;
+    height: 38px;
+    font-size: 28px;
+  }
+
+  .block-handle {
+    left: -20px;
+    width: 17px;
+  }
+
+  .block-menu {
+    width: min(316px, calc(100vw - 20px));
+  }
+}
+
+</style>
 </head>
 <body>
   <main class="page-shell">
@@ -69,9 +752,3048 @@
 
   <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 
-  <script src="storage.js" defer></script>
-  <script src="editor.js" defer></script>
-  <script src="ui.js" defer></script>
-  <script src="app.js" defer></script>
+  <script>
+/* ===== storage.js ===== */
+(() => {
+  'use strict';
+
+  const CURRENT_VERSION = 4;
+  const DEFAULT_NOTE = Object.freeze({
+    version: CURRENT_VERSION,
+    title: 'Note',
+    icon: '✏️',
+    body: '',
+    blocks: Object.freeze([])
+  });
+
+  function cloneDefaultNote() {
+    return { ...DEFAULT_NOTE, blocks: [] };
+  }
+
+  function bytesToBase64Url(bytes) {
+    let binary = '';
+    for (let index = 0; index < bytes.length; index += 1) {
+      binary += String.fromCharCode(bytes[index]);
+    }
+
+    return btoa(binary)
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/g, '');
+  }
+
+  function base64UrlToBytes(value) {
+    const base64 = value.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+    const binary = atob(base64 + padding);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+
+    return bytes;
+  }
+
+  function encodeUtf8(value) {
+    return bytesToBase64Url(new TextEncoder().encode(value));
+  }
+
+  function decodeUtf8(value) {
+    return new TextDecoder().decode(base64UrlToBytes(value));
+  }
+
+  function sanitizeBodyHtml(html) {
+    if (typeof html !== 'string' || !html.trim()) return '';
+
+    const template = document.createElement('template');
+    template.innerHTML = html;
+
+    const blockedTags = new Set([
+      'SCRIPT',
+      'STYLE',
+      'IFRAME',
+      'OBJECT',
+      'EMBED',
+      'FORM',
+      'META',
+      'LINK'
+    ]);
+
+    const allowedDataAttributes = new Set([
+      'data-type',
+      'data-indent',
+      'data-open',
+      'data-checked',
+      'data-title-style',
+      'data-block-id'
+    ]);
+
+    const walker = document.createTreeWalker(
+      template.content,
+      NodeFilter.SHOW_ELEMENT
+    );
+
+    const elements = [];
+    while (walker.nextNode()) elements.push(walker.currentNode);
+
+    elements.forEach((element) => {
+      if (blockedTags.has(element.tagName)) {
+        element.remove();
+        return;
+      }
+
+      [...element.attributes].forEach((attribute) => {
+        const name = attribute.name.toLowerCase();
+        const value = attribute.value.trim();
+
+        if (name.startsWith('on')) {
+          element.removeAttribute(attribute.name);
+          return;
+        }
+
+        if (name.startsWith('data-') && !allowedDataAttributes.has(name)) {
+          element.removeAttribute(attribute.name);
+          return;
+        }
+
+        if (name === 'style' || name === 'id' || name === 'draggable') {
+          element.removeAttribute(attribute.name);
+          return;
+        }
+
+        if (name === 'href') {
+          const safeProtocol = /^(https?:|mailto:|tel:|#)/i.test(value);
+          if (!safeProtocol) element.removeAttribute(attribute.name);
+        }
+      });
+    });
+
+    return template.innerHTML;
+  }
+
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function normalizeMarks(marks) {
+    if (Array.isArray(marks)) {
+      return new Set(marks.map((mark) => typeof mark === 'string' ? mark : mark?.type).filter(Boolean));
+    }
+
+    if (marks && typeof marks === 'object') {
+      return new Set(
+        Object.entries(marks)
+          .filter(([, enabled]) => Boolean(enabled))
+          .map(([name]) => name)
+      );
+    }
+
+    return new Set();
+  }
+
+  function richTextToHtml(value) {
+    if (typeof value === 'string' || typeof value === 'number') {
+      return escapeHtml(value).replace(/\n/g, '<br>');
+    }
+
+    if (!Array.isArray(value)) {
+      if (value && typeof value === 'object') {
+        return richTextToHtml(
+          value.segments
+          ?? value.richText
+          ?? value.content
+          ?? value.text
+          ?? value.value
+          ?? ''
+        );
+      }
+      return '';
+    }
+
+    return value.map((segment) => {
+      if (typeof segment === 'string' || typeof segment === 'number') {
+        return escapeHtml(segment).replace(/\n/g, '<br>');
+      }
+
+      const text = escapeHtml(
+        segment?.text
+        ?? segment?.value
+        ?? segment?.content
+        ?? segment?.plainText
+        ?? ''
+      ).replace(/\n/g, '<br>');
+
+      const marks = normalizeMarks(segment?.marks ?? segment?.styles ?? segment?.format);
+      let html = text;
+
+      if (marks.has('code') || marks.has('inline-code')) html = `<code>${html}</code>`;
+      if (marks.has('bold') || marks.has('strong')) html = `<strong>${html}</strong>`;
+      if (marks.has('italic') || marks.has('em')) html = `<em>${html}</em>`;
+      if (marks.has('strike') || marks.has('strikethrough')) html = `<s>${html}</s>`;
+      if (marks.has('highlight') || marks.has('mark')) html = `<mark>${html}</mark>`;
+
+      const href = segment?.href ?? segment?.url ?? segment?.link?.href ?? segment?.link;
+      if (typeof href === 'string' && /^(https?:|mailto:|tel:)/i.test(href)) {
+        html = `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${html}</a>`;
+      }
+
+      return html;
+    }).join('');
+  }
+
+  function mapLegacyBlockType(type) {
+    const normalized = String(type || 'paragraph').toLowerCase();
+    const mappings = {
+      paragraph: 'paragraph',
+      text: 'paragraph',
+      'heading-1': 'heading-1',
+      heading1: 'heading-1',
+      h1: 'heading-1',
+      'heading-2': 'heading-2',
+      heading2: 'heading-2',
+      h2: 'heading-2',
+      'heading-3': 'heading-3',
+      heading3: 'heading-3',
+      h3: 'heading-3',
+      'bullet-list': 'bulleted-list',
+      'bulleted-list': 'bulleted-list',
+      bullet: 'bulleted-list',
+      ul: 'bulleted-list',
+      'number-list': 'numbered-list',
+      'numbered-list': 'numbered-list',
+      numbered: 'numbered-list',
+      ol: 'numbered-list',
+      checklist: 'checklist',
+      todo: 'checklist',
+      'to-do': 'checklist',
+      toggle: 'toggle',
+      dropdown: 'toggle',
+      quote: 'quote',
+      blockquote: 'quote',
+      divider: 'divider',
+      hr: 'divider',
+      code: 'code',
+      'code-block': 'code'
+    };
+    return mappings[normalized] || 'paragraph';
+  }
+
+  function legacyBlockContent(block) {
+    return richTextToHtml(
+      block?.segments
+      ?? block?.richText
+      ?? block?.content
+      ?? block?.text
+      ?? block?.value
+      ?? ''
+    ) || '<br>';
+  }
+
+  function blockShell(type, indent, id, mainHtml, extraAttributes = '') {
+    return `
+      <div class="block" data-type="${type}" data-indent="${indent}" data-block-id="${escapeHtml(id)}" ${extraAttributes}>
+        <button type="button" class="block-handle" tabindex="-1" contenteditable="false" data-drag-handle="true" aria-label="Block actions">⋮⋮</button>
+        <div class="block-main">${mainHtml}</div>
+      </div>
+    `.trim();
+  }
+
+  function legacyBlockToHtml(block, index = 0) {
+    const type = mapLegacyBlockType(block?.type ?? block?.kind ?? block?.blockType);
+    const indent = Math.max(0, Math.min(8, Number.parseInt(block?.indent ?? block?.depth ?? block?.level ?? 0, 10) || 0));
+    const id = block?.id || `legacy-${index}`;
+    const content = legacyBlockContent(block);
+
+    if (type === 'divider') {
+      return blockShell(type, indent, id, '<hr class="block-divider" contenteditable="false">');
+    }
+
+    if (type === 'toggle') {
+      const title = richTextToHtml(
+        block?.title
+        ?? block?.titleSegments
+        ?? block?.summary
+        ?? block?.content
+        ?? block?.text
+        ?? ''
+      ) || '<br>';
+      const titleStyle = mapLegacyBlockType(block?.titleStyle || 'paragraph');
+      const open = block?.open === false ? 'false' : 'true';
+      const children = block?.children ?? block?.blocks ?? block?.body ?? [];
+      const childHtml = Array.isArray(children)
+        ? children.map((child, childIndex) => legacyBlockToHtml(child, childIndex)).join('')
+        : '';
+
+      return blockShell(
+        type,
+        indent,
+        id,
+        `<div class="toggle-row"><button type="button" class="toggle-caret" tabindex="-1" contenteditable="false" data-toggle-caret="true" aria-label="Toggle content">▶</button><div class="toggle-title" data-block-content="true" data-title-style="${titleStyle}">${title}</div></div><div class="toggle-body" data-toggle-body="true">${childHtml}</div>`,
+        `data-open="${open}"`
+      );
+    }
+
+    if (type === 'code') {
+      const plainText = block?.text ?? block?.content ?? block?.value ?? '';
+      return blockShell(type, indent, id, `<pre class="block-content code-content" data-block-content="true">${escapeHtml(Array.isArray(plainText) ? plainText.map((segment) => segment?.text ?? segment?.value ?? '').join('') : plainText)}</pre>`);
+    }
+
+    let prefix = '';
+    let extraAttributes = '';
+
+    if (type === 'bulleted-list') {
+      prefix = '<span class="list-marker" contenteditable="false" aria-hidden="true">•</span>';
+    } else if (type === 'numbered-list') {
+      prefix = '<span class="list-marker" contenteditable="false" aria-hidden="true">1.</span>';
+    } else if (type === 'checklist') {
+      const checked = Boolean(block?.checked ?? block?.done ?? block?.completed);
+      prefix = `<label class="check-marker" contenteditable="false"><input type="checkbox" aria-label="Complete item" ${checked ? 'checked' : ''}></label>`;
+      extraAttributes = `data-checked="${checked ? 'true' : 'false'}"`;
+    }
+
+    return blockShell(
+      type,
+      indent,
+      id,
+      `<div class="block-row">${prefix}<div class="block-content" data-block-content="true">${content}</div></div>`,
+      extraAttributes
+    );
+  }
+
+  function structuredBlocksToHtml(blocks) {
+    if (!Array.isArray(blocks)) return '';
+    return blocks.map((block, index) => legacyBlockToHtml(block, index)).join('');
+  }
+
+  function sanitizeInlineHtml(html) {
+    if (typeof html !== 'string' || !html.trim()) return '';
+
+    const template = document.createElement('template');
+    template.innerHTML = html;
+
+    const allowedTags = new Set([
+      'A', 'BR', 'STRONG', 'B', 'EM', 'I', 'S', 'STRIKE', 'MARK', 'CODE', 'SPAN'
+    ]);
+    const elements = [...template.content.querySelectorAll('*')];
+
+    elements.forEach((element) => {
+      if (!allowedTags.has(element.tagName)) {
+        element.replaceWith(...element.childNodes);
+        return;
+      }
+
+      [...element.attributes].forEach((attribute) => {
+        const name = attribute.name.toLowerCase();
+        if (element.tagName !== 'A' || !['href', 'target', 'rel'].includes(name)) {
+          element.removeAttribute(attribute.name);
+        }
+      });
+
+      if (element.tagName === 'A') {
+        const href = element.getAttribute('href') || '';
+        if (!/^(https?:|mailto:|tel:|#)/i.test(href)) {
+          element.removeAttribute('href');
+        } else {
+          element.setAttribute('target', '_blank');
+          element.setAttribute('rel', 'noopener noreferrer');
+        }
+      }
+    });
+
+    return template.innerHTML;
+  }
+
+  const BLOCK_TYPE_CODES = Object.freeze({
+    paragraph: 'p',
+    'heading-1': 'h1',
+    'heading-2': 'h2',
+    'heading-3': 'h3',
+    'bulleted-list': 'ul',
+    'numbered-list': 'ol',
+    checklist: 'ck',
+    toggle: 'tg',
+    quote: 'q',
+    divider: 'hr',
+    code: 'cd'
+  });
+
+  const CODE_BLOCK_TYPES = Object.freeze(
+    Object.fromEntries(Object.entries(BLOCK_TYPE_CODES).map(([type, code]) => [code, type]))
+  );
+
+  function normalizeBlock(block) {
+    if (!block || typeof block !== 'object') {
+      return { type: 'paragraph', indent: 0, html: '' };
+    }
+
+    const rawType = block.type ?? block.kind ?? block.blockType ?? block.t;
+    const type = CODE_BLOCK_TYPES[rawType] || mapLegacyBlockType(rawType);
+    const indent = Math.max(
+      0,
+      Math.min(8, Number.parseInt(block.indent ?? block.depth ?? block.level ?? block.i ?? 0, 10) || 0)
+    );
+
+    if (type === 'divider') {
+      return { type, indent };
+    }
+
+    if (type === 'code') {
+      const value = block.text ?? block.value ?? block.v ?? block.content ?? '';
+      const text = Array.isArray(value)
+        ? value.map((segment) => segment?.text ?? segment?.value ?? segment?.content ?? '').join('')
+        : String(value ?? '');
+      return { type, indent, text };
+    }
+
+    if (type === 'toggle') {
+      const rawTitleStyle = block.titleStyle ?? block.s ?? 'paragraph';
+      const titleStyle = CODE_BLOCK_TYPES[rawTitleStyle] || mapLegacyBlockType(rawTitleStyle);
+      const rawChildren = block.children ?? block.blocks ?? block.body ?? block.b ?? [];
+      const rawTitle = block.title
+        ?? block.titleSegments
+        ?? block.summary
+        ?? block.html
+        ?? block.h
+        ?? block.content
+        ?? block.text
+        ?? '';
+
+      return {
+        type,
+        indent,
+        html: sanitizeInlineHtml(
+          typeof rawTitle === 'string' ? rawTitle : richTextToHtml(rawTitle)
+        ),
+        titleStyle: ['paragraph', 'heading-1', 'heading-2', 'heading-3'].includes(titleStyle)
+          ? titleStyle
+          : 'paragraph',
+        open: block.open !== false && block.o !== 0,
+        children: normalizeBlocks(Array.isArray(rawChildren) ? rawChildren : [])
+      };
+    }
+
+    const rawHtml = block.html ?? block.h;
+    const html = typeof rawHtml === 'string'
+      ? sanitizeInlineHtml(rawHtml)
+      : sanitizeInlineHtml(legacyBlockContent(block));
+
+    return {
+      type,
+      indent,
+      html,
+      ...(type === 'checklist'
+        ? { checked: Boolean(block.checked ?? block.done ?? block.completed ?? block.x) }
+        : {})
+    };
+  }
+
+  function normalizeBlocks(blocks) {
+    if (!Array.isArray(blocks)) return [];
+    return blocks.map(normalizeBlock);
+  }
+
+  function compactBlock(block) {
+    const normalized = normalizeBlock(block);
+    const compact = { t: BLOCK_TYPE_CODES[normalized.type] || 'p' };
+
+    if (normalized.indent > 0) compact.i = normalized.indent;
+
+    if (normalized.type === 'divider') return compact;
+
+    if (normalized.type === 'code') {
+      if (normalized.text) compact.v = normalized.text;
+      return compact;
+    }
+
+    if (normalized.html) compact.h = normalized.html;
+
+    if (normalized.type === 'checklist' && normalized.checked) {
+      compact.x = 1;
+    }
+
+    if (normalized.type === 'toggle') {
+      if (normalized.titleStyle && normalized.titleStyle !== 'paragraph') {
+        compact.s = BLOCK_TYPE_CODES[normalized.titleStyle] || 'p';
+      }
+      if (normalized.open === false) compact.o = 0;
+      if (normalized.children?.length) compact.b = normalized.children.map(compactBlock);
+    }
+
+    return compact;
+  }
+
+  function normalizeNote(value) {
+    if (!value || typeof value !== 'object') return cloneDefaultNote();
+
+    const rawBlocks = Array.isArray(value.blocks)
+      ? value.blocks
+      : Array.isArray(value.b)
+        ? value.b
+        : [];
+
+    return {
+      version: CURRENT_VERSION,
+      title: typeof value.title === 'string'
+        ? value.title
+        : typeof value.t === 'string'
+          ? value.t
+          : DEFAULT_NOTE.title,
+      icon: typeof value.icon === 'string'
+        ? value.icon
+        : typeof value.e === 'string'
+          ? value.e
+          : DEFAULT_NOTE.icon,
+      body: sanitizeBodyHtml(
+        typeof value.body === 'string'
+          ? value.body
+          : typeof value.b === 'string'
+            ? value.b
+            : ''
+      ),
+      blocks: normalizeBlocks(rawBlocks)
+    };
+  }
+
+  function parseJsonPayload(raw) {
+    const parsed = JSON.parse(raw);
+    return normalizeNote(parsed);
+  }
+
+  function decodeLegacyBase64(hash) {
+    const normalized = hash.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = '='.repeat((4 - (normalized.length % 4)) % 4);
+    const binary = atob(normalized + padding);
+
+    try {
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      return new TextDecoder().decode(bytes);
+    } catch {
+      return decodeURIComponent(escape(binary));
+    }
+  }
+
+  function loadFromHash(hash = window.location.hash) {
+    const value = hash.startsWith('#') ? hash.slice(1) : hash;
+    if (!value) return cloneDefaultNote();
+
+    const attempts = [
+      () => parseJsonPayload(decodeUtf8(value)),
+      () => parseJsonPayload(decodeLegacyBase64(value)),
+      () => parseJsonPayload(decodeURIComponent(value))
+    ];
+
+    for (const attempt of attempts) {
+      try {
+        return attempt();
+      } catch {
+        // Continue with the next legacy format.
+      }
+    }
+
+    try {
+      const decoded = decodeLegacyBase64(value);
+      return normalizeNote({ body: decoded });
+    } catch {
+      try {
+        return normalizeNote({ body: decodeURIComponent(value) });
+      } catch {
+        return cloneDefaultNote();
+      }
+    }
+  }
+
+  function encodeNote(note) {
+    const normalized = normalizeNote(note);
+    const compactPayload = {
+      v: CURRENT_VERSION,
+      t: normalized.title,
+      e: normalized.icon,
+      b: normalized.blocks.length
+        ? normalized.blocks.map(compactBlock)
+        : normalized.body || []
+    };
+
+    return encodeUtf8(JSON.stringify(compactPayload));
+  }
+
+  function writeToUrl(note, options = {}) {
+    const { replace = true } = options;
+    const encoded = encodeNote(note);
+    const nextUrl = `${window.location.pathname}${window.location.search}#${encoded}`;
+
+    if (replace) {
+      history.replaceState(null, '', nextUrl);
+    } else {
+      history.pushState(null, '', nextUrl);
+    }
+
+    return window.location.href;
+  }
+
+  function clearUrl(options = {}) {
+    const { replace = false } = options;
+    const nextUrl = `${window.location.pathname}${window.location.search}`;
+
+    if (replace) {
+      history.replaceState(null, '', nextUrl);
+    } else {
+      history.pushState(null, '', nextUrl);
+    }
+  }
+
+  window.NoteStorage = Object.freeze({
+    CURRENT_VERSION,
+    DEFAULT_NOTE,
+    cloneDefaultNote,
+    normalizeNote,
+    sanitizeBodyHtml,
+    sanitizeInlineHtml,
+    normalizeBlocks,
+    loadFromHash,
+    encodeNote,
+    writeToUrl,
+    clearUrl
+  });
+})();
+
+</script>
+  <script>
+/* ===== editor.js ===== */
+(() => {
+  'use strict';
+
+  const BLOCK_TYPES = new Set([
+    'paragraph',
+    'heading-1',
+    'heading-2',
+    'heading-3',
+    'bulleted-list',
+    'numbered-list',
+    'checklist',
+    'toggle',
+    'quote',
+    'divider',
+    'code'
+  ]);
+
+  const MAX_INDENT = 8;
+  const URL_PATTERN = /https?:\/\/[^\s<]+/gi;
+
+  function createEditor(options) {
+    const {
+      root,
+      onChange = () => {},
+      onRequestMenu = () => {},
+      onCloseMenu = () => {},
+      onSelectionChange = () => {}
+    } = options || {};
+
+    if (!(root instanceof HTMLElement)) {
+      throw new Error('NoteEditor requires a valid root element.');
+    }
+
+    let savedRange = null;
+    let activeMenuBlock = null;
+    let armedDragBlock = null;
+    let draggedBlock = null;
+    let dragTargetBlock = null;
+    let dragTargetPosition = null;
+    let suppressChange = false;
+    let blockCounter = 0;
+
+    const abortController = new AbortController();
+    const { signal } = abortController;
+
+    function nextBlockId() {
+      blockCounter += 1;
+      return `block-${Date.now().toString(36)}-${blockCounter.toString(36)}`;
+    }
+
+    function normalizeType(type) {
+      return BLOCK_TYPES.has(type) ? type : 'paragraph';
+    }
+
+    function clampIndent(value) {
+      const numericValue = Number.parseInt(value, 10);
+      if (!Number.isFinite(numericValue)) return 0;
+      return Math.max(0, Math.min(MAX_INDENT, numericValue));
+    }
+
+    function cleanHtml(html) {
+      if (typeof html !== 'string' || !html.trim()) return '<br>';
+      return html;
+    }
+
+    function createHandle() {
+      const handle = document.createElement('button');
+      handle.type = 'button';
+      handle.className = 'block-handle';
+      handle.tabIndex = -1;
+      handle.contentEditable = 'false';
+      handle.setAttribute('data-drag-handle', 'true');
+      handle.setAttribute('aria-label', 'Block actions');
+      handle.textContent = '⋮⋮';
+      return handle;
+    }
+
+    function createEditableContent(className = 'block-content', html = '<br>') {
+      const content = document.createElement('div');
+      content.className = className;
+      content.setAttribute('data-block-content', 'true');
+      content.innerHTML = cleanHtml(html);
+      return content;
+    }
+
+    function createBlock(type = 'paragraph', options = {}) {
+      const normalizedType = normalizeType(type);
+      const block = document.createElement('div');
+      block.className = 'block';
+      block.dataset.type = normalizedType;
+      block.dataset.indent = String(clampIndent(options.indent || 0));
+      block.dataset.blockId = options.id || nextBlockId();
+      block.draggable = false;
+
+      const handle = createHandle();
+      const main = document.createElement('div');
+      main.className = 'block-main';
+
+      block.append(handle, main);
+
+      if (normalizedType === 'divider') {
+        const divider = document.createElement('hr');
+        divider.className = 'block-divider';
+        divider.contentEditable = 'false';
+        main.append(divider);
+        return block;
+      }
+
+      if (normalizedType === 'toggle') {
+        block.dataset.open = options.open === false ? 'false' : 'true';
+
+        const row = document.createElement('div');
+        row.className = 'toggle-row';
+
+        const caret = document.createElement('button');
+        caret.type = 'button';
+        caret.className = 'toggle-caret';
+        caret.tabIndex = -1;
+        caret.contentEditable = 'false';
+        caret.setAttribute('data-toggle-caret', 'true');
+        caret.setAttribute('aria-label', 'Toggle content');
+        caret.textContent = '▶';
+
+        const title = createEditableContent(
+          'toggle-title',
+          options.html || options.titleHtml || '<br>'
+        );
+        title.dataset.titleStyle = options.titleStyle || 'paragraph';
+
+        const body = document.createElement('div');
+        body.className = 'toggle-body';
+        body.setAttribute('data-toggle-body', 'true');
+
+        if (Array.isArray(options.children)) {
+          options.children.forEach((child) => body.append(child));
+        }
+
+        row.append(caret, title);
+        main.append(row, body);
+        return block;
+      }
+
+      if (normalizedType === 'code') {
+        const pre = document.createElement('pre');
+        pre.className = 'block-content code-content';
+        pre.setAttribute('data-block-content', 'true');
+        pre.textContent = options.text || htmlToPlainText(options.html || '');
+        if (!pre.textContent) pre.append(document.createElement('br'));
+        main.append(pre);
+        return block;
+      }
+
+      const row = document.createElement('div');
+      row.className = 'block-row';
+
+      if (normalizedType === 'bulleted-list' || normalizedType === 'numbered-list') {
+        const marker = document.createElement('span');
+        marker.className = 'list-marker';
+        marker.contentEditable = 'false';
+        marker.setAttribute('aria-hidden', 'true');
+        marker.textContent = normalizedType === 'bulleted-list' ? '•' : '1.';
+        row.append(marker);
+      }
+
+      if (normalizedType === 'checklist') {
+        const marker = document.createElement('label');
+        marker.className = 'check-marker';
+        marker.contentEditable = 'false';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = options.checked === true;
+        checkbox.setAttribute('aria-label', 'Complete item');
+
+        marker.append(checkbox);
+        row.append(marker);
+        block.dataset.checked = checkbox.checked ? 'true' : 'false';
+      }
+
+      row.append(createEditableContent('block-content', options.html || '<br>'));
+      main.append(row);
+      return block;
+    }
+
+    function htmlToPlainText(html) {
+      const template = document.createElement('template');
+      template.innerHTML = html;
+      return template.content.textContent || '';
+    }
+
+    function getContentElement(block) {
+      if (!block) return null;
+      if (block.dataset.type === 'toggle') {
+        return block.querySelector(':scope > .block-main > .toggle-row > .toggle-title');
+      }
+      return block.querySelector(':scope > .block-main [data-block-content]');
+    }
+
+    function getToggleBody(block) {
+      if (!block || block.dataset.type !== 'toggle') return null;
+      return block.querySelector(':scope > .block-main > .toggle-body');
+    }
+
+    function getBlockFromNode(node) {
+      const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+      if (!element || !root.contains(element)) return null;
+      return element.closest('.block');
+    }
+
+    function getTopLevelBlock(block) {
+      let current = block;
+      while (current?.parentElement?.closest('.block')) {
+        current = current.parentElement.closest('.block');
+      }
+      return current;
+    }
+
+    function getCurrentBlock() {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return activeMenuBlock;
+      return getBlockFromNode(selection.anchorNode) || activeMenuBlock;
+    }
+
+    function selectionInsideRoot(selection = window.getSelection()) {
+      if (!selection || selection.rangeCount === 0) return false;
+      const range = selection.getRangeAt(0);
+      return root.contains(range.startContainer) && root.contains(range.endContainer);
+    }
+
+    function saveSelection() {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection)) return;
+      savedRange = selection.getRangeAt(0).cloneRange();
+    }
+
+    function restoreSelection() {
+      if (!savedRange) return false;
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(savedRange);
+      return true;
+    }
+
+    function focusAtStart(element) {
+      if (!element) return;
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      element.focus();
+      saveSelection();
+    }
+
+    function focusAtEnd(element) {
+      if (!element) return;
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      range.collapse(false);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      element.focus();
+      saveSelection();
+    }
+
+    function ensureCaretBlock() {
+      let block = getCurrentBlock();
+      if (block && root.contains(block)) return block;
+
+      block = root.querySelector('.block');
+      if (!block) {
+        block = createBlock('paragraph');
+        root.append(block);
+      }
+      focusAtStart(getContentElement(block));
+      return block;
+    }
+
+    function isContentEmpty(content) {
+      if (!content) return true;
+      return (content.textContent || '').replace(/\u200B/g, '').trim() === '';
+    }
+
+    function normalizeEmptyContent(content) {
+      if (!content) return;
+      if (isContentEmpty(content)) content.innerHTML = '<br>';
+    }
+
+    function setBlockIndent(block, indent) {
+      if (!block) return;
+      block.dataset.indent = String(clampIndent(indent));
+      refreshNumberedMarkers();
+      emitChange();
+    }
+
+    function indentBlock(block) {
+      setBlockIndent(block, clampIndent(block?.dataset.indent) + 1);
+    }
+
+    function outdentBlock(block) {
+      setBlockIndent(block, clampIndent(block?.dataset.indent) - 1);
+    }
+
+    function insertAfter(referenceBlock, newBlock) {
+      const parent = referenceBlock?.parentElement || root;
+      referenceBlock?.insertAdjacentElement('afterend', newBlock);
+      if (!referenceBlock) parent.append(newBlock);
+      refreshNumberedMarkers();
+      return newBlock;
+    }
+
+    function insertBefore(referenceBlock, newBlock) {
+      if (referenceBlock?.parentElement) {
+        referenceBlock.insertAdjacentElement('beforebegin', newBlock);
+      } else {
+        root.prepend(newBlock);
+      }
+      refreshNumberedMarkers();
+      return newBlock;
+    }
+
+    function ensureRootHasBlock() {
+      if (!root.querySelector(':scope > .block')) {
+        root.append(createBlock('paragraph'));
+      }
+      updateEmptyState();
+    }
+
+    function updateEmptyState() {
+      const blocks = [...root.querySelectorAll(':scope > .block')];
+      const empty = blocks.length === 1
+        && blocks[0].dataset.type === 'paragraph'
+        && isContentEmpty(getContentElement(blocks[0]));
+      root.classList.toggle('is-empty', empty);
+    }
+
+    function emitChange() {
+      if (suppressChange) return;
+      updateEmptyState();
+      refreshNumberedMarkers();
+      onChange(serialize());
+    }
+
+    function createContentsRange(node) {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      return range;
+    }
+
+    function rangesEqual(first, second) {
+      try {
+        return first.compareBoundaryPoints(Range.START_TO_START, second) === 0
+          && first.compareBoundaryPoints(Range.END_TO_END, second) === 0;
+      } catch {
+        return false;
+      }
+    }
+
+    function selectionMatchesNodeContents(selection, node) {
+      if (!selection || selection.rangeCount !== 1 || !node) return false;
+      return rangesEqual(selection.getRangeAt(0), createContentsRange(node));
+    }
+
+    function selectNodeContents(node) {
+      const selection = window.getSelection();
+      const range = createContentsRange(node);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    function handleSelectAll(event) {
+      const isSelectAll = (event.ctrlKey || event.metaKey)
+        && !event.altKey
+        && event.key.toLowerCase() === 'a';
+
+      if (!isSelectAll) return false;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.repeat) return true;
+
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection)) {
+        root.focus();
+        selectNodeContents(root);
+        return true;
+      }
+
+      if (selectionMatchesNodeContents(selection, root)) return true;
+
+      const block = getBlockFromNode(selection.anchorNode);
+      const content = getContentElement(block);
+      if (!content) {
+        selectNodeContents(root);
+        return true;
+      }
+
+      if (selectionMatchesNodeContents(selection, content)) {
+        selectNodeContents(root);
+      } else {
+        selectNodeContents(content);
+      }
+
+      saveSelection();
+      return true;
+    }
+
+    function isCaretAtStart(content, range) {
+      if (!content || !range) return false;
+      const before = document.createRange();
+      before.selectNodeContents(content);
+      before.setEnd(range.startContainer, range.startOffset);
+      return before.toString() === '';
+    }
+
+    function isCaretAtEnd(content, range) {
+      if (!content || !range) return false;
+      const after = document.createRange();
+      after.selectNodeContents(content);
+      after.setStart(range.endContainer, range.endOffset);
+      return after.toString() === '';
+    }
+
+    function extractRightHtml(content, range) {
+      const tailRange = document.createRange();
+      tailRange.selectNodeContents(content);
+      tailRange.setStart(range.startContainer, range.startOffset);
+      const fragment = tailRange.extractContents();
+      const container = document.createElement('div');
+      container.append(fragment);
+      return container.innerHTML || '<br>';
+    }
+
+    function splitCurrentBlock(block, content) {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return null;
+
+      const range = selection.getRangeAt(0);
+      if (!range.collapsed) range.deleteContents();
+
+      const rightHtml = extractRightHtml(content, range);
+      normalizeEmptyContent(content);
+
+      const currentType = block.dataset.type;
+      const nextType = ['heading-1', 'heading-2', 'heading-3', 'quote'].includes(currentType)
+        ? 'paragraph'
+        : currentType;
+
+      const nextBlock = createBlock(nextType, {
+        indent: block.dataset.indent,
+        html: rightHtml,
+        checked: false
+      });
+
+      insertAfter(block, nextBlock);
+      focusAtStart(getContentElement(nextBlock));
+      emitChange();
+      return nextBlock;
+    }
+
+    function replaceBlockWithParagraph(block) {
+      const currentContent = getContentElement(block);
+      const paragraph = createBlock('paragraph', {
+        indent: block.dataset.indent,
+        html: currentContent?.innerHTML || '<br>'
+      });
+      block.replaceWith(paragraph);
+      focusAtStart(getContentElement(paragraph));
+      emitChange();
+      return paragraph;
+    }
+
+    function exitToggleFromBody(block) {
+      const toggle = block.parentElement?.closest('.block[data-type="toggle"]');
+      if (!toggle) return false;
+
+      const body = getToggleBody(toggle);
+      const isLastChild = body?.lastElementChild === block;
+      if (!isLastChild) return false;
+
+      block.remove();
+      const paragraph = createBlock('paragraph', {
+        indent: toggle.dataset.indent
+      });
+      insertAfter(toggle, paragraph);
+      focusAtStart(getContentElement(paragraph));
+      emitChange();
+      return true;
+    }
+
+    function handleCodeEnter(event, block, content, range) {
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        const paragraph = createBlock('paragraph', {
+          indent: block.dataset.indent
+        });
+        insertAfter(block, paragraph);
+        focusAtStart(getContentElement(paragraph));
+        emitChange();
+        return true;
+      }
+
+      const textBeforeRange = document.createRange();
+      textBeforeRange.selectNodeContents(content);
+      textBeforeRange.setEnd(range.startContainer, range.startOffset);
+      const textBefore = textBeforeRange.toString();
+
+      if (range.collapsed && isCaretAtEnd(content, range) && textBefore.endsWith('\n')) {
+        event.preventDefault();
+        content.textContent = textBefore.slice(0, -1);
+        const paragraph = createBlock('paragraph', {
+          indent: block.dataset.indent
+        });
+        insertAfter(block, paragraph);
+        focusAtStart(getContentElement(paragraph));
+        emitChange();
+        return true;
+      }
+
+      event.preventDefault();
+      document.execCommand('insertText', false, '\n');
+      emitChange();
+      return true;
+    }
+
+    function handleEnter(event) {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection) || selection.rangeCount === 0) return false;
+
+      const range = selection.getRangeAt(0);
+      const block = getBlockFromNode(range.startContainer);
+      if (!block) return false;
+
+      const content = getContentElement(block);
+      if (!content) {
+        if (block.dataset.type === 'divider') {
+          event.preventDefault();
+          const paragraph = createBlock('paragraph', { indent: block.dataset.indent });
+          insertAfter(block, paragraph);
+          focusAtStart(getContentElement(paragraph));
+          emitChange();
+          return true;
+        }
+        return false;
+      }
+
+      const inToggleTitle = content.classList.contains('toggle-title');
+      if (inToggleTitle) {
+        event.preventDefault();
+        block.dataset.open = 'true';
+        const body = getToggleBody(block);
+        let firstChild = body.querySelector(':scope > .block');
+        if (!firstChild) {
+          firstChild = createBlock('paragraph');
+          body.append(firstChild);
+        }
+        focusAtStart(getContentElement(firstChild));
+        emitChange();
+        return true;
+      }
+
+      if (block.dataset.type === 'code') {
+        return handleCodeEnter(event, block, content, range);
+      }
+
+      const empty = isContentEmpty(content);
+      if (empty) {
+        const indent = clampIndent(block.dataset.indent);
+
+        // An empty nested block exits one indentation level at a time.
+        // Inside a toggle, the following Enter exits the toggle itself.
+        if (indent > 0) {
+          event.preventDefault();
+          outdentBlock(block);
+          focusAtStart(content);
+          return true;
+        }
+
+        if (block.parentElement?.classList.contains('toggle-body') && exitToggleFromBody(block)) {
+          event.preventDefault();
+          return true;
+        }
+
+        if (['bulleted-list', 'numbered-list', 'checklist', 'quote', 'heading-1', 'heading-2', 'heading-3'].includes(block.dataset.type)) {
+          event.preventDefault();
+          replaceBlockWithParagraph(block);
+          return true;
+        }
+      }
+
+      event.preventDefault();
+      splitCurrentBlock(block, content);
+      return true;
+    }
+
+    function insertTextAtSelection(text) {
+      document.execCommand('insertText', false, text);
+    }
+
+    function handleTab(event) {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection) || selection.rangeCount === 0) return false;
+
+      const block = getBlockFromNode(selection.anchorNode);
+      if (!block) return false;
+
+      event.preventDefault();
+
+      if (block.dataset.type === 'code') {
+        if (event.shiftKey) {
+          const content = getContentElement(block);
+          const range = selection.getRangeAt(0);
+          const beforeRange = document.createRange();
+          beforeRange.selectNodeContents(content);
+          beforeRange.setEnd(range.startContainer, range.startOffset);
+          const before = beforeRange.toString();
+
+          if (before.endsWith('  ')) {
+            range.setStart(range.startContainer, Math.max(0, range.startOffset - 2));
+            range.deleteContents();
+          }
+        } else {
+          insertTextAtSelection('  ');
+        }
+        emitChange();
+        return true;
+      }
+
+      if (event.shiftKey) {
+        outdentBlock(block);
+      } else {
+        indentBlock(block);
+      }
+
+      return true;
+    }
+
+    function handleBackspace(event) {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection) || selection.rangeCount === 0 || !selection.isCollapsed) {
+        return false;
+      }
+
+      const range = selection.getRangeAt(0);
+      const block = getBlockFromNode(range.startContainer);
+      const content = getContentElement(block);
+      if (!block || !content || !isCaretAtStart(content, range)) return false;
+
+      if (block.dataset.type === 'code' && isContentEmpty(content)) {
+        event.preventDefault();
+        replaceBlockWithParagraph(block);
+        return true;
+      }
+
+      const indent = clampIndent(block.dataset.indent);
+      if (indent > 0) {
+        event.preventDefault();
+        outdentBlock(block);
+        focusAtStart(content);
+        return true;
+      }
+
+      if (!['paragraph', 'toggle', 'code'].includes(block.dataset.type)) {
+        event.preventDefault();
+        const paragraph = transformBlock(block, 'paragraph');
+        focusAtStart(getContentElement(paragraph));
+        return true;
+      }
+
+      if (isContentEmpty(content)) {
+        const previous = block.previousElementSibling;
+        if (previous?.classList.contains('block')) {
+          event.preventDefault();
+          block.remove();
+          focusAtEnd(getContentElement(previous));
+          ensureRootHasBlock();
+          emitChange();
+          return true;
+        }
+      }
+
+      return false;
+    }
+
+    function handleDeleteWholeNote(event) {
+      const selection = window.getSelection();
+      if (!selectionMatchesNodeContents(selection, root)) return false;
+      if (!['Backspace', 'Delete'].includes(event.key)) return false;
+
+      event.preventDefault();
+      root.replaceChildren(createBlock('paragraph'));
+      focusAtStart(getContentElement(root.firstElementChild));
+      emitChange();
+      return true;
+    }
+
+    function getPlainText(content) {
+      return (content?.textContent || '').replace(/\u200B/g, '');
+    }
+
+    function clearContent(content) {
+      content.innerHTML = '<br>';
+    }
+
+    function removeLeadingCharacters(content, characterCount) {
+      if (!content || characterCount <= 0) return;
+
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      let remaining = characterCount;
+      let endNode = null;
+      let endOffset = 0;
+
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        if (remaining <= node.textContent.length) {
+          endNode = node;
+          endOffset = remaining;
+          break;
+        }
+        remaining -= node.textContent.length;
+      }
+
+      if (!endNode) return;
+
+      const range = document.createRange();
+      range.setStart(content, 0);
+      range.setEnd(endNode, endOffset);
+      range.deleteContents();
+      normalizeEmptyContent(content);
+    }
+
+    function applyShortcut(block, content, text) {
+      if (!block || !content) return false;
+
+      const isToggleTitle = content.classList.contains('toggle-title');
+      const headingPrefixes = [
+        ['### ', 'heading-3'],
+        ['## ', 'heading-2'],
+        ['# ', 'heading-1']
+      ];
+
+      if (isToggleTitle) {
+        const headingMatch = headingPrefixes.find(([prefix]) => text.startsWith(prefix));
+        if (!headingMatch) return false;
+
+        removeLeadingCharacters(content, headingMatch[0].length);
+        content.dataset.titleStyle = headingMatch[1];
+        focusAtStart(content);
+        emitChange();
+        return true;
+      }
+
+      // Also supports pasted or pre-existing content such as "> # Heading".
+      const compoundToggle = text.match(/^>\s(#{1,3})\s/);
+      if (compoundToggle) {
+        const prefixLength = compoundToggle[0].length;
+        const titleStyle = `heading-${compoundToggle[1].length}`;
+        removeLeadingCharacters(content, prefixLength);
+        const toggle = transformBlock(block, 'toggle', { titleStyle });
+        focusAtStart(getContentElement(toggle));
+        return true;
+      }
+
+      const mappings = [
+        ['``` ', 'code'],
+        ['--- ', 'divider'],
+        ['[ ] ', 'checklist'],
+        ['[] ', 'checklist'],
+        ['### ', 'heading-3'],
+        ['## ', 'heading-2'],
+        ['# ', 'heading-1'],
+        ['1. ', 'numbered-list'],
+        ['- ', 'bulleted-list'],
+        ['> ', 'toggle']
+      ];
+
+      const mapping = mappings.find(([prefix]) => text.startsWith(prefix));
+      if (!mapping) return false;
+
+      const [prefix, targetType] = mapping;
+      const remainingText = text.slice(prefix.length);
+      if (targetType === 'divider' && remainingText.trim()) return false;
+
+      const sourceType = block.dataset.type;
+      removeLeadingCharacters(content, prefix.length);
+
+      const transformOptions = {};
+      if (targetType === 'toggle' && sourceType.startsWith('heading-')) {
+        transformOptions.titleStyle = sourceType;
+      }
+
+      const transformed = transformBlock(block, targetType, transformOptions);
+      if (targetType === 'divider') {
+        const paragraph = createBlock('paragraph', { indent: transformed.dataset.indent });
+        insertAfter(transformed, paragraph);
+        focusAtStart(getContentElement(paragraph));
+      } else {
+        focusAtStart(getContentElement(transformed));
+      }
+      return true;
+    }
+
+    function updateSlashMenu(block, content) {
+      const text = getPlainText(content);
+      if (!text.startsWith('/') || text.includes('\n')) {
+        onCloseMenu();
+        return;
+      }
+
+      const range = window.getSelection()?.rangeCount
+        ? window.getSelection().getRangeAt(0)
+        : null;
+      const rect = range?.getBoundingClientRect();
+      const fallbackRect = content.getBoundingClientRect();
+
+      activeMenuBlock = block;
+      saveSelection();
+      onRequestMenu({
+        mode: 'slash',
+        block,
+        query: text.slice(1),
+        x: rect?.left || fallbackRect.left,
+        y: (rect?.bottom || fallbackRect.bottom) + 6
+      });
+    }
+
+    function removeSlashQuery(block) {
+      const content = getContentElement(block);
+      if (!content) return;
+      const text = getPlainText(content);
+      if (text.startsWith('/')) clearContent(content);
+    }
+
+    function getBlockHtml(block) {
+      const content = getContentElement(block);
+      if (!content) return '<br>';
+      if (block.dataset.type === 'code') {
+        return escapeHtml(content.textContent || '');
+      }
+      return content.innerHTML || '<br>';
+    }
+
+    function escapeHtml(value) {
+      return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function transformBlock(block, targetType, options = {}) {
+      if (!block) block = getCurrentBlock();
+      if (!block) return null;
+
+      const normalizedTarget = normalizeType(targetType);
+      const sourceType = block.dataset.type;
+      const indent = block.dataset.indent;
+
+      if (sourceType === normalizedTarget && normalizedTarget !== 'toggle') {
+        return block;
+      }
+
+      if (sourceType === 'toggle') {
+        const title = getContentElement(block);
+        const titleHtml = title?.innerHTML || '<br>';
+        const body = getToggleBody(block);
+        const children = [...(body?.children || [])];
+
+        if (normalizedTarget === 'toggle') {
+          if (options.titleStyle) title.dataset.titleStyle = options.titleStyle;
+          emitChange();
+          return block;
+        }
+
+        const replacement = createBlock(normalizedTarget, {
+          indent,
+          html: titleHtml
+        });
+        block.replaceWith(replacement);
+
+        let insertionPoint = replacement;
+        children.forEach((child) => {
+          insertionPoint.insertAdjacentElement('afterend', child);
+          insertionPoint = child;
+        });
+
+        refreshNumberedMarkers();
+        emitChange();
+        return replacement;
+      }
+
+      const sourceContent = getContentElement(block);
+      const sourceHtml = sourceType === 'code'
+        ? escapeHtml(sourceContent?.textContent || '')
+        : sourceContent?.innerHTML || '<br>';
+
+      if (normalizedTarget === 'toggle') {
+        const titleStyle = options.titleStyle
+          || (sourceType.startsWith('heading-') ? sourceType : 'paragraph');
+        const toggle = createBlock('toggle', {
+          indent,
+          html: sourceHtml,
+          titleStyle,
+          open: true
+        });
+        block.replaceWith(toggle);
+        refreshNumberedMarkers();
+        emitChange();
+        return toggle;
+      }
+
+      const replacement = createBlock(normalizedTarget, {
+        indent,
+        html: sourceHtml,
+        text: sourceType === 'code' ? sourceContent?.textContent || '' : undefined,
+        checked: normalizedTarget === 'checklist' ? false : undefined
+      });
+
+      block.replaceWith(replacement);
+      refreshNumberedMarkers();
+      emitChange();
+      return replacement;
+    }
+
+    function setToggleTitleStyle(block, titleStyle) {
+      if (!block || block.dataset.type !== 'toggle') return;
+      const title = getContentElement(block);
+      title.dataset.titleStyle = ['paragraph', 'heading-1', 'heading-2', 'heading-3'].includes(titleStyle)
+        ? titleStyle
+        : 'paragraph';
+      emitChange();
+    }
+
+    function insertBlock(type, referenceBlock = null, options = {}) {
+      const reference = referenceBlock || activeMenuBlock || ensureCaretBlock();
+      const block = createBlock(type, {
+        indent: reference?.dataset.indent || 0,
+        ...options
+      });
+      insertAfter(reference, block);
+      focusAtStart(getContentElement(block));
+      emitChange();
+      return block;
+    }
+
+    function duplicateBlock(block = null) {
+      const source = block || activeMenuBlock || getCurrentBlock();
+      if (!source) return null;
+
+      const clone = source.cloneNode(true);
+      clone.classList.remove('dragging', 'drag-target-before', 'drag-target-after');
+      clone.draggable = false;
+
+      clone.querySelectorAll('.block').forEach((child) => {
+        child.dataset.blockId = nextBlockId();
+        child.draggable = false;
+      });
+      clone.dataset.blockId = nextBlockId();
+
+      insertAfter(source, clone);
+      focusAtEnd(getContentElement(clone));
+      emitChange();
+      return clone;
+    }
+
+    function deleteBlock(block = null) {
+      const target = block || activeMenuBlock || getCurrentBlock();
+      if (!target) return;
+
+      const previous = target.previousElementSibling;
+      const next = target.nextElementSibling;
+      const parent = target.parentElement;
+      target.remove();
+
+      ensureRootHasBlock();
+
+      const focusTarget = previous?.classList.contains('block')
+        ? previous
+        : next?.classList.contains('block')
+          ? next
+          : parent?.querySelector('.block') || root.querySelector('.block');
+
+      focusAtEnd(getContentElement(focusTarget));
+      emitChange();
+    }
+
+    function moveBlock(block, direction) {
+      const target = block || activeMenuBlock || getCurrentBlock();
+      if (!target) return;
+
+      if (direction === 'up') {
+        const previous = target.previousElementSibling;
+        if (previous?.classList.contains('block')) {
+          previous.insertAdjacentElement('beforebegin', target);
+        }
+      } else {
+        const next = target.nextElementSibling;
+        if (next?.classList.contains('block')) {
+          next.insertAdjacentElement('afterend', target);
+        }
+      }
+
+      focusAtStart(getContentElement(target));
+      emitChange();
+    }
+
+    function executeMenuCommand(command, block = null) {
+      const target = block || activeMenuBlock || getCurrentBlock();
+      restoreSelection();
+
+      if (command.startsWith('transform:')) {
+        removeSlashQuery(target);
+        const targetType = command.slice('transform:'.length);
+        const transformed = transformBlock(target, targetType);
+
+        if (targetType === 'divider') {
+          const paragraph = createBlock('paragraph', { indent: transformed.dataset.indent });
+          insertAfter(transformed, paragraph);
+          focusAtStart(getContentElement(paragraph));
+          emitChange();
+        } else {
+          focusAtStart(getContentElement(transformed));
+        }
+      } else if (command.startsWith('insert:')) {
+        removeSlashQuery(target);
+        const targetType = command.slice('insert:'.length);
+        const inserted = insertBlock(targetType, target);
+        if (targetType === 'divider') {
+          const paragraph = createBlock('paragraph', { indent: inserted.dataset.indent });
+          insertAfter(inserted, paragraph);
+          focusAtStart(getContentElement(paragraph));
+          emitChange();
+        }
+      } else if (command.startsWith('toggle-title:')) {
+        setToggleTitleStyle(target, command.slice('toggle-title:'.length));
+        focusAtStart(getContentElement(target));
+      } else if (command === 'duplicate') {
+        duplicateBlock(target);
+      } else if (command === 'delete') {
+        deleteBlock(target);
+      } else if (command === 'move-up') {
+        moveBlock(target, 'up');
+      } else if (command === 'move-down') {
+        moveBlock(target, 'down');
+      }
+
+      activeMenuBlock = null;
+      onCloseMenu();
+    }
+
+    function refreshNumberedMarkers(container = root) {
+      const children = [...container.children].filter((child) => child.classList?.contains('block'));
+      const counters = new Map();
+
+      children.forEach((block) => {
+        const type = block.dataset.type;
+        const indent = clampIndent(block.dataset.indent);
+
+        if (type === 'numbered-list') {
+          const key = String(indent);
+          const previous = counters.get(key) || 0;
+          const next = previous + 1;
+          counters.set(key, next);
+          const marker = block.querySelector(':scope > .block-main > .block-row > .list-marker');
+          if (marker) marker.textContent = `${next}.`;
+        } else {
+          [...counters.keys()]
+            .filter((key) => Number(key) >= indent)
+            .forEach((key) => counters.delete(key));
+        }
+
+        if (type === 'toggle') {
+          const body = getToggleBody(block);
+          if (body) refreshNumberedMarkers(body);
+        }
+      });
+    }
+
+    function readableDomain(hostname) {
+      const host = hostname.replace(/^www\./i, '').toLowerCase();
+      const known = {
+        'youtube.com': 'YouTube',
+        'youtu.be': 'YouTube',
+        'github.com': 'GitHub',
+        'linkedin.com': 'LinkedIn',
+        'wikipedia.org': 'Wikipedia',
+        'en.wikipedia.org': 'Wikipedia',
+        'google.com': 'Google',
+        'docs.google.com': 'Google Docs',
+        'drive.google.com': 'Google Drive',
+        'notion.so': 'Notion',
+        'reddit.com': 'Reddit',
+        'x.com': 'X',
+        'twitter.com': 'X'
+      };
+
+      if (known[host]) return known[host];
+
+      const mainPart = host.split('.').slice(-2, -1)[0] || host.split('.')[0] || host;
+      return mainPart
+        .split(/[-_]/)
+        .filter(Boolean)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+    }
+
+    function readablePath(pathname) {
+      const specialPaths = {
+        '/feed/subscriptions': 'Subscriptions',
+        '/feed/history': 'History',
+        '/watch-later': 'Watch Later'
+      };
+
+      if (specialPaths[pathname]) return specialPaths[pathname];
+
+      const segments = pathname
+        .split('/')
+        .map((segment) => segment.trim())
+        .filter(Boolean);
+
+      if (!segments.length) return '';
+
+      const value = decodeURIComponent(segments[segments.length - 1])
+        .replace(/\.[a-z0-9]{2,5}$/i, '')
+        .replace(/[-_+]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!value || /^[a-zA-Z0-9_-]{18,}$/.test(value)) return '';
+
+      return value
+        .split(' ')
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+    }
+
+    function readableLinkLabel(rawUrl) {
+      try {
+        const parsed = new URL(rawUrl);
+        const domain = readableDomain(parsed.hostname);
+        const path = readablePath(parsed.pathname);
+        return path ? `${path} - ${domain}` : domain;
+      } catch {
+        return rawUrl;
+      }
+    }
+
+    function trimUrlPunctuation(rawUrl) {
+      const trailing = rawUrl.match(/[),.;!?]+$/)?.[0] || '';
+      return {
+        url: trailing ? rawUrl.slice(0, -trailing.length) : rawUrl,
+        trailing
+      };
+    }
+
+    function insertFragmentAtSelection(fragment) {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
+
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      const lastNode = fragment.lastChild;
+      range.insertNode(fragment);
+
+      if (lastNode) {
+        range.setStartAfter(lastNode);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+    }
+
+    function insertLinkedText(text) {
+      const fragment = document.createDocumentFragment();
+      let cursor = 0;
+      let match;
+      URL_PATTERN.lastIndex = 0;
+
+      while ((match = URL_PATTERN.exec(text)) !== null) {
+        const { url, trailing } = trimUrlPunctuation(match[0]);
+        const start = match.index;
+
+        if (start > cursor) {
+          fragment.append(document.createTextNode(text.slice(cursor, start)));
+        }
+
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+        anchor.textContent = readableLinkLabel(url);
+        fragment.append(anchor);
+
+        if (trailing) fragment.append(document.createTextNode(trailing));
+        cursor = start + match[0].length;
+      }
+
+      if (cursor < text.length) {
+        fragment.append(document.createTextNode(text.slice(cursor)));
+      }
+
+      insertFragmentAtSelection(fragment);
+    }
+
+    function handlePaste(event) {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection)) return;
+
+      const text = event.clipboardData?.getData('text/plain') || '';
+      if (!text || !URL_PATTERN.test(text)) {
+        URL_PATTERN.lastIndex = 0;
+        return;
+      }
+      URL_PATTERN.lastIndex = 0;
+
+      event.preventDefault();
+
+      const matches = text.match(URL_PATTERN) || [];
+      const isSingleUrl = matches.length === 1 && text.trim() === matches[0];
+
+      if (isSingleUrl && selection && !selection.isCollapsed) {
+        document.execCommand('createLink', false, matches[0]);
+        root.querySelectorAll('a').forEach((anchor) => {
+          if (anchor.href === matches[0] || anchor.getAttribute('href') === matches[0]) {
+            anchor.target = '_blank';
+            anchor.rel = 'noopener noreferrer';
+          }
+        });
+      } else {
+        insertLinkedText(text);
+      }
+
+      emitChange();
+    }
+
+    function migrateNode(node) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (!node.textContent.trim()) return [];
+        return [createBlock('paragraph', { html: escapeHtml(node.textContent) })];
+      }
+
+      if (!(node instanceof HTMLElement)) return [];
+
+      if (node.classList.contains('block') && BLOCK_TYPES.has(node.dataset.type)) {
+        return [node];
+      }
+
+      if (node.matches('details.notion-toggle')) {
+        const titleSource = node.querySelector('summary .notion-toggle-title, summary');
+        const bodySource = node.querySelector('.notion-toggle-body');
+        const titleStyle = titleSource?.classList.contains('as-h1')
+          ? 'heading-1'
+          : titleSource?.classList.contains('as-h2')
+            ? 'heading-2'
+            : titleSource?.classList.contains('as-h3')
+              ? 'heading-3'
+              : 'paragraph';
+
+        const children = [];
+        [...(bodySource?.childNodes || [])].forEach((child) => {
+          children.push(...migrateNode(child));
+        });
+
+        return [createBlock('toggle', {
+          html: titleSource?.innerHTML || '<br>',
+          titleStyle,
+          open: node.open,
+          children
+        })];
+      }
+
+      if (node.matches('ul, ol')) {
+        const type = node.tagName === 'UL' ? 'bulleted-list' : 'numbered-list';
+        return [...node.children]
+          .filter((child) => child.tagName === 'LI')
+          .map((item) => createBlock(type, { html: item.innerHTML }));
+      }
+
+      if (node.classList.contains('todo-item')) {
+        const text = node.querySelector('.todo-text')?.innerHTML || node.textContent || '';
+        const checked = node.querySelector('input[type="checkbox"]')?.checked
+          || node.classList.contains('completed');
+        return [createBlock('checklist', { html: text, checked })];
+      }
+
+      const typeMap = {
+        H1: 'heading-1',
+        H2: 'heading-2',
+        H3: 'heading-3',
+        BLOCKQUOTE: 'quote',
+        PRE: 'code',
+        HR: 'divider'
+      };
+
+      const mappedType = typeMap[node.tagName] || 'paragraph';
+      return [createBlock(mappedType, {
+        html: node.innerHTML,
+        text: mappedType === 'code' ? node.textContent : undefined
+      })];
+    }
+
+    function deserializeBlockData(data) {
+      const type = normalizeType(data?.type);
+      const children = type === 'toggle' && Array.isArray(data?.children)
+        ? data.children.map(deserializeBlockData)
+        : [];
+
+      return createBlock(type, {
+        indent: data?.indent || 0,
+        html: data?.html || '<br>',
+        text: data?.text || '',
+        checked: data?.checked === true,
+        titleStyle: data?.titleStyle || 'paragraph',
+        open: data?.open !== false,
+        children
+      });
+    }
+
+    function serializeBlockData(block) {
+      const type = normalizeType(block?.dataset.type);
+      const indent = clampIndent(block?.dataset.indent);
+      const result = { type };
+
+      if (indent > 0) result.indent = indent;
+
+      if (type === 'divider') return result;
+
+      const content = getContentElement(block);
+      if (type === 'code') {
+        const text = content?.textContent || '';
+        if (text) result.text = text;
+        return result;
+      }
+
+      const html = content?.innerHTML === '<br>' ? '' : content?.innerHTML || '';
+      if (html) result.html = html;
+
+      if (type === 'checklist' && block.dataset.checked === 'true') {
+        result.checked = true;
+      }
+
+      if (type === 'toggle') {
+        const titleStyle = content?.dataset.titleStyle || 'paragraph';
+        if (titleStyle !== 'paragraph') result.titleStyle = titleStyle;
+        if (block.dataset.open === 'false') result.open = false;
+
+        const body = getToggleBody(block);
+        const children = [...(body?.children || [])]
+          .filter((child) => child.classList?.contains('block'))
+          .map(serializeBlockData);
+        if (children.length) result.children = children;
+      }
+
+      return result;
+    }
+
+    function normalizeLoadedBlocks() {
+      const existingTopBlocks = [...root.children].filter((child) => child.classList?.contains('block'));
+
+      if (existingTopBlocks.length === root.children.length && existingTopBlocks.length > 0) {
+        root.querySelectorAll('.block').forEach((block) => {
+          block.dataset.type = normalizeType(block.dataset.type);
+          block.dataset.indent = String(clampIndent(block.dataset.indent));
+          block.dataset.blockId = block.dataset.blockId || nextBlockId();
+          block.draggable = false;
+          block.classList.remove('dragging', 'drag-target-before', 'drag-target-after');
+
+          if (!block.querySelector(':scope > .block-handle')) {
+            block.prepend(createHandle());
+          }
+
+          if (block.dataset.type === 'toggle') {
+            block.dataset.open = block.dataset.open === 'false' ? 'false' : 'true';
+            const title = getContentElement(block);
+            if (title) title.dataset.titleStyle = title.dataset.titleStyle || 'paragraph';
+          }
+
+          if (block.dataset.type === 'checklist') {
+            const checkbox = block.querySelector('input[type="checkbox"]');
+            const checked = block.dataset.checked === 'true';
+            if (checkbox) checkbox.checked = checked;
+          }
+        });
+        return;
+      }
+
+      const nodes = [...root.childNodes];
+      root.replaceChildren();
+      nodes.forEach((node) => {
+        migrateNode(node).forEach((block) => root.append(block));
+      });
+    }
+
+    function load(value = '') {
+      suppressChange = true;
+      try {
+        root.replaceChildren();
+
+        if (Array.isArray(value)) {
+          value.forEach((blockData) => root.append(deserializeBlockData(blockData)));
+        } else {
+          root.innerHTML = typeof value === 'string' ? value : '';
+          normalizeLoadedBlocks();
+        }
+
+        ensureRootHasBlock();
+        refreshNumberedMarkers();
+        updateEmptyState();
+      } finally {
+        suppressChange = false;
+      }
+    }
+
+    function serialize() {
+      return [...root.children]
+        .filter((child) => child.classList?.contains('block'))
+        .map(serializeBlockData);
+    }
+
+    function clearDragIndicators() {
+      root.querySelectorAll('.drag-target-before, .drag-target-after').forEach((block) => {
+        block.classList.remove('drag-target-before', 'drag-target-after');
+      });
+      dragTargetBlock = null;
+      dragTargetPosition = null;
+    }
+
+    root.addEventListener('keydown', (event) => {
+      if (handleSelectAll(event)) return;
+      if (handleDeleteWholeNote(event)) return;
+      if (event.key === 'Enter' && handleEnter(event)) return;
+      if (event.key === 'Tab' && handleTab(event)) return;
+      if (event.key === 'Backspace' && handleBackspace(event)) return;
+    }, { capture: true, signal });
+
+    root.addEventListener('input', (event) => {
+      const block = getBlockFromNode(event.target);
+      const content = event.target.closest?.('[data-block-content]');
+      if (!block || !content) {
+        ensureRootHasBlock();
+        emitChange();
+        return;
+      }
+
+      const text = getPlainText(content);
+
+      if (block.dataset.type === 'code') {
+        onCloseMenu();
+        emitChange();
+        return;
+      }
+
+      if (applyShortcut(block, content, text)) return;
+
+      updateSlashMenu(block, content);
+      emitChange();
+    }, { signal });
+
+    root.addEventListener('paste', handlePaste, { signal });
+
+    root.addEventListener('change', (event) => {
+      const checkbox = event.target.closest?.('input[type="checkbox"]');
+      if (!checkbox) return;
+      const block = checkbox.closest('.block[data-type="checklist"]');
+      if (!block) return;
+      block.dataset.checked = checkbox.checked ? 'true' : 'false';
+      emitChange();
+    }, { signal });
+
+    root.addEventListener('click', (event) => {
+      const caret = event.target.closest?.('[data-toggle-caret]');
+      if (caret) {
+        const block = caret.closest('.block[data-type="toggle"]');
+        block.dataset.open = block.dataset.open === 'true' ? 'false' : 'true';
+        emitChange();
+        return;
+      }
+
+      const handle = event.target.closest?.('[data-drag-handle]');
+      if (handle) {
+        event.preventDefault();
+        const block = handle.closest('.block');
+        activeMenuBlock = block;
+        saveSelection();
+        const rect = handle.getBoundingClientRect();
+        onRequestMenu({
+          mode: 'context',
+          block,
+          query: '',
+          x: rect.left,
+          y: rect.bottom + 5
+        });
+      }
+    }, { signal });
+
+    root.addEventListener('contextmenu', (event) => {
+      const block = event.target.closest?.('.block');
+      if (!block) return;
+      event.preventDefault();
+      activeMenuBlock = block;
+      saveSelection();
+      onRequestMenu({
+        mode: 'context',
+        block,
+        query: '',
+        x: event.clientX,
+        y: event.clientY
+      });
+    }, { signal });
+
+    root.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      const handle = event.target.closest?.('[data-drag-handle]');
+      armedDragBlock = null;
+
+      if (handle) {
+        const block = handle.closest('.block');
+        block.draggable = true;
+        block.setAttribute('aria-grabbed', 'true');
+        armedDragBlock = block;
+      }
+    }, { capture: true, signal });
+
+    root.addEventListener('dragstart', (event) => {
+      const block = event.target.closest?.('.block');
+      if (!armedDragBlock || block !== armedDragBlock) {
+        event.preventDefault();
+        return;
+      }
+
+      draggedBlock = block;
+      draggedBlock.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', draggedBlock.dataset.blockId);
+    }, { capture: true, signal });
+
+    root.addEventListener('dragover', (event) => {
+      if (!draggedBlock) return;
+      const target = event.target.closest?.('.block');
+      if (!target || target === draggedBlock || target.contains(draggedBlock) || draggedBlock.contains(target)) return;
+
+      event.preventDefault();
+      clearDragIndicators();
+
+      const rect = target.getBoundingClientRect();
+      const position = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+      target.classList.add(position === 'before' ? 'drag-target-before' : 'drag-target-after');
+      dragTargetBlock = target;
+      dragTargetPosition = position;
+    }, { signal });
+
+    root.addEventListener('drop', (event) => {
+      if (!draggedBlock || !dragTargetBlock) return;
+      event.preventDefault();
+
+      if (dragTargetPosition === 'before') {
+        dragTargetBlock.insertAdjacentElement('beforebegin', draggedBlock);
+      } else {
+        dragTargetBlock.insertAdjacentElement('afterend', draggedBlock);
+      }
+
+      clearDragIndicators();
+      refreshNumberedMarkers();
+      emitChange();
+    }, { signal });
+
+    const disarmDrag = () => {
+      clearDragIndicators();
+      if (armedDragBlock) {
+        armedDragBlock.draggable = false;
+        armedDragBlock.removeAttribute('aria-grabbed');
+      }
+      if (draggedBlock) draggedBlock.classList.remove('dragging');
+      armedDragBlock = null;
+      draggedBlock = null;
+    };
+
+    root.addEventListener('dragend', disarmDrag, { signal });
+    root.addEventListener('pointerup', () => {
+      if (!draggedBlock) disarmDrag();
+    }, { signal });
+    root.addEventListener('pointercancel', disarmDrag, { signal });
+
+    document.addEventListener('selectionchange', () => {
+      const selection = window.getSelection();
+      if (selectionInsideRoot(selection)) {
+        saveSelection();
+        onSelectionChange(selection);
+      } else {
+        onSelectionChange(null);
+      }
+    }, { signal });
+
+    load('');
+
+    return Object.freeze({
+      root,
+      load,
+      serialize,
+      focus() {
+        const block = ensureCaretBlock();
+        focusAtEnd(getContentElement(block));
+      },
+      getCurrentBlock,
+      getContentElement,
+      getToggleBody,
+      saveSelection,
+      restoreSelection,
+      createBlock,
+      insertBlock,
+      transformBlock,
+      setToggleTitleStyle,
+      duplicateBlock,
+      deleteBlock,
+      moveBlock,
+      executeMenuCommand,
+      readableLinkLabel,
+      destroy() {
+        abortController.abort();
+      }
+    });
+  }
+
+  window.NoteEditor = Object.freeze({
+    BLOCK_TYPES,
+    create: createEditor
+  });
+})();
+
+</script>
+  <script>
+/* ===== ui.js ===== */
+(() => {
+  'use strict';
+
+  const TYPE_ITEMS = [
+    {
+      section: 'Text',
+      command: 'transform:paragraph',
+      icon: 'T',
+      title: 'Text',
+      description: 'Plain text block',
+      keywords: 'paragraph normal text'
+    },
+    {
+      section: 'Text',
+      command: 'transform:heading-1',
+      icon: 'H1',
+      title: 'Heading 1',
+      description: 'Large section heading',
+      keywords: 'title header heading one'
+    },
+    {
+      section: 'Text',
+      command: 'transform:heading-2',
+      icon: 'H2',
+      title: 'Heading 2',
+      description: 'Medium section heading',
+      keywords: 'header heading two'
+    },
+    {
+      section: 'Text',
+      command: 'transform:heading-3',
+      icon: 'H3',
+      title: 'Heading 3',
+      description: 'Small section heading',
+      keywords: 'header heading three'
+    },
+    {
+      section: 'Lists',
+      command: 'transform:bulleted-list',
+      icon: '•',
+      title: 'Bulleted list',
+      description: 'Create a simple list',
+      keywords: 'bullet unordered list'
+    },
+    {
+      section: 'Lists',
+      command: 'transform:numbered-list',
+      icon: '1.',
+      title: 'Numbered list',
+      description: 'Create an ordered list',
+      keywords: 'number ordered list'
+    },
+    {
+      section: 'Lists',
+      command: 'transform:checklist',
+      icon: '☑',
+      title: 'To-do',
+      description: 'Track a task',
+      keywords: 'todo task checkbox checklist'
+    },
+    {
+      section: 'Blocks',
+      command: 'transform:toggle',
+      icon: '▶',
+      title: 'Toggle',
+      description: 'Hide content below a title',
+      keywords: 'dropdown disclosure collapsible'
+    },
+    {
+      section: 'Blocks',
+      command: 'transform:quote',
+      icon: '❝',
+      title: 'Quote',
+      description: 'Emphasize a passage',
+      keywords: 'blockquote callout quotation'
+    },
+    {
+      section: 'Blocks',
+      command: 'transform:code',
+      icon: '</>',
+      title: 'Code',
+      description: 'Write preformatted code',
+      keywords: 'code preformatted monospace'
+    },
+    {
+      section: 'Blocks',
+      command: 'transform:divider',
+      icon: '—',
+      title: 'Divider',
+      description: 'Add a horizontal separator',
+      keywords: 'line separator rule'
+    }
+  ];
+
+  const INSERT_ITEMS = TYPE_ITEMS.map((item) => ({
+    ...item,
+    command: item.command.replace('transform:', 'insert:')
+  }));
+
+  const CONTEXT_ITEMS = [
+    {
+      section: 'Block',
+      command: 'open-transform',
+      icon: '↻',
+      title: 'Turn into',
+      description: 'Change the block type',
+      keywords: 'convert transform type',
+      chevron: true
+    },
+    {
+      section: 'Block',
+      command: 'duplicate',
+      icon: '⧉',
+      title: 'Duplicate',
+      description: 'Create a copy below',
+      keywords: 'copy clone'
+    },
+    {
+      section: 'Move',
+      command: 'move-up',
+      icon: '↑',
+      title: 'Move up',
+      description: 'Move before the previous block',
+      keywords: 'reorder up'
+    },
+    {
+      section: 'Move',
+      command: 'move-down',
+      icon: '↓',
+      title: 'Move down',
+      description: 'Move after the next block',
+      keywords: 'reorder down'
+    },
+    {
+      section: 'Danger',
+      command: 'delete',
+      icon: '⌫',
+      title: 'Delete',
+      description: 'Remove this block',
+      keywords: 'remove trash'
+    }
+  ];
+
+  const TOGGLE_TITLE_ITEMS = [
+    {
+      section: 'Toggle title',
+      command: 'toggle-title:paragraph',
+      icon: 'T',
+      title: 'Text title',
+      description: 'Use regular text',
+      keywords: 'toggle title normal paragraph'
+    },
+    {
+      section: 'Toggle title',
+      command: 'toggle-title:heading-1',
+      icon: 'H1',
+      title: 'Heading 1 title',
+      description: 'Use the largest heading',
+      keywords: 'toggle title heading one'
+    },
+    {
+      section: 'Toggle title',
+      command: 'toggle-title:heading-2',
+      icon: 'H2',
+      title: 'Heading 2 title',
+      description: 'Use a medium heading',
+      keywords: 'toggle title heading two'
+    },
+    {
+      section: 'Toggle title',
+      command: 'toggle-title:heading-3',
+      icon: 'H3',
+      title: 'Heading 3 title',
+      description: 'Use a small heading',
+      keywords: 'toggle title heading three'
+    }
+  ];
+
+  function createUI(options) {
+    const {
+      menu,
+      inlineToolbar,
+      toast,
+      iconButton,
+      iconPicker,
+      editorRoot,
+      executeEditorCommand
+    } = options || {};
+
+    if (!(menu instanceof HTMLElement)) {
+      throw new Error('NoteUI requires a menu element.');
+    }
+
+    const abortController = new AbortController();
+    const { signal } = abortController;
+
+    let menuState = null;
+    let selectedIndex = 0;
+    let toastTimer = null;
+    let savedInlineRange = null;
+
+    function getItems(mode, block) {
+      if (mode === 'context') return CONTEXT_ITEMS;
+      if (mode === 'transform') {
+        return block?.dataset.type === 'toggle'
+          ? [...TOGGLE_TITLE_ITEMS, ...TYPE_ITEMS]
+          : TYPE_ITEMS;
+      }
+      if (mode === 'slash') return TYPE_ITEMS;
+      if (mode === 'insert') return INSERT_ITEMS;
+      return TYPE_ITEMS;
+    }
+
+    function filterItems(items, query) {
+      const normalizedQuery = query.trim().toLowerCase();
+      if (!normalizedQuery) return items;
+
+      return items.filter((item) => {
+        const haystack = [
+          item.title,
+          item.description,
+          item.keywords,
+          item.section
+        ].join(' ').toLowerCase();
+        return haystack.includes(normalizedQuery);
+      });
+    }
+
+    function renderMenu() {
+      if (!menuState) return;
+
+      const allItems = getItems(menuState.mode, menuState.block);
+      const items = filterItems(allItems, menuState.query || '');
+      menuState.items = items;
+      selectedIndex = Math.max(0, Math.min(selectedIndex, items.length - 1));
+
+      menu.replaceChildren();
+
+      if (!items.length) {
+        const empty = document.createElement('div');
+        empty.className = 'menu-label';
+        empty.textContent = 'No matching blocks';
+        menu.append(empty);
+        return;
+      }
+
+      const sections = [];
+      items.forEach((item) => {
+        let section = sections.find((entry) => entry.name === item.section);
+        if (!section) {
+          section = { name: item.section, items: [] };
+          sections.push(section);
+        }
+        section.items.push(item);
+      });
+
+      let itemIndex = 0;
+      sections.forEach((sectionData) => {
+        const section = document.createElement('div');
+        section.className = 'menu-section';
+
+        const label = document.createElement('div');
+        label.className = 'menu-label';
+        label.textContent = sectionData.name;
+        section.append(label);
+
+        sectionData.items.forEach((item) => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'menu-item';
+          button.dataset.command = item.command;
+          button.dataset.menuIndex = String(itemIndex);
+          button.setAttribute('role', 'menuitem');
+
+          if (itemIndex === selectedIndex) button.classList.add('is-selected');
+
+          const icon = document.createElement('span');
+          icon.className = 'menu-icon';
+          icon.textContent = item.icon;
+
+          const copy = document.createElement('span');
+          copy.className = 'menu-copy';
+
+          const title = document.createElement('span');
+          title.className = 'menu-title';
+          title.textContent = item.title;
+
+          const description = document.createElement('span');
+          description.className = 'menu-description';
+          description.textContent = item.description;
+
+          copy.append(title, description);
+          button.append(icon, copy);
+
+          if (item.chevron) {
+            const chevron = document.createElement('span');
+            chevron.className = 'menu-chevron';
+            chevron.textContent = '›';
+            button.append(chevron);
+          }
+
+          section.append(button);
+          itemIndex += 1;
+        });
+
+        menu.append(section);
+      });
+
+      requestAnimationFrame(() => {
+        menu.querySelector('.menu-item.is-selected')?.scrollIntoView({ block: 'nearest' });
+      });
+    }
+
+    function positionMenu() {
+      if (!menuState || menu.hidden) return;
+
+      const padding = 10;
+      const rect = menu.getBoundingClientRect();
+      const maxLeft = Math.max(padding, window.innerWidth - rect.width - padding);
+      const maxTop = Math.max(padding, window.innerHeight - rect.height - padding);
+
+      menu.style.left = `${Math.max(padding, Math.min(menuState.x, maxLeft))}px`;
+      menu.style.top = `${Math.max(padding, Math.min(menuState.y, maxTop))}px`;
+    }
+
+    function openMenu(request) {
+      hideInlineToolbar();
+
+      const isSameSlashMenu = menuState
+        && menuState.mode === 'slash'
+        && request.mode === 'slash'
+        && menuState.block === request.block;
+
+      menuState = {
+        mode: request.mode || 'slash',
+        block: request.block || null,
+        query: request.query || '',
+        x: Number.isFinite(request.x) ? request.x : 12,
+        y: Number.isFinite(request.y) ? request.y : 12,
+        items: []
+      };
+
+      if (!isSameSlashMenu) selectedIndex = 0;
+      menu.hidden = false;
+      renderMenu();
+      positionMenu();
+
+      const handle = request.block?.querySelector(':scope > .block-handle');
+      if (handle) handle.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeMenu() {
+      if (menuState?.block) {
+        const handle = menuState.block.querySelector(':scope > .block-handle');
+        handle?.removeAttribute('aria-expanded');
+      }
+      menuState = null;
+      selectedIndex = 0;
+      menu.hidden = true;
+      menu.replaceChildren();
+    }
+
+    function activateCommand(command) {
+      if (!menuState || !command) return;
+
+      if (command === 'open-transform') {
+        menuState = {
+          ...menuState,
+          mode: 'transform',
+          query: ''
+        };
+        selectedIndex = 0;
+        renderMenu();
+        positionMenu();
+        return;
+      }
+
+      executeEditorCommand(command, menuState.block);
+      closeMenu();
+    }
+
+    function moveSelection(delta) {
+      if (!menuState?.items?.length) return;
+      selectedIndex = (selectedIndex + delta + menuState.items.length) % menuState.items.length;
+      renderMenu();
+    }
+
+    function showToast(message, duration = 1700) {
+      if (!(toast instanceof HTMLElement)) return;
+      window.clearTimeout(toastTimer);
+      toast.textContent = message;
+      toast.hidden = false;
+      toastTimer = window.setTimeout(() => {
+        toast.hidden = true;
+      }, duration);
+    }
+
+    function hideInlineToolbar() {
+      if (!(inlineToolbar instanceof HTMLElement)) return;
+      inlineToolbar.hidden = true;
+      savedInlineRange = null;
+    }
+
+    function updateInlineToolbar(selection) {
+      if (!(inlineToolbar instanceof HTMLElement)) return;
+
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        hideInlineToolbar();
+        return;
+      }
+
+      const range = selection.getRangeAt(0);
+      if (!editorRoot.contains(range.commonAncestorContainer)) {
+        hideInlineToolbar();
+        return;
+      }
+
+      savedInlineRange = range.cloneRange();
+      const rect = range.getBoundingClientRect();
+      if (!rect.width && !rect.height) {
+        hideInlineToolbar();
+        return;
+      }
+
+      inlineToolbar.hidden = false;
+      const toolbarRect = inlineToolbar.getBoundingClientRect();
+      const left = Math.max(
+        8,
+        Math.min(
+          rect.left + rect.width / 2 - toolbarRect.width / 2,
+          window.innerWidth - toolbarRect.width - 8
+        )
+      );
+      const top = Math.max(8, rect.top - toolbarRect.height - 7);
+
+      inlineToolbar.style.left = `${left}px`;
+      inlineToolbar.style.top = `${top}px`;
+    }
+
+    function restoreInlineSelection() {
+      if (!savedInlineRange) return false;
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(savedInlineRange);
+      return true;
+    }
+
+    function applyInlineCommand(command) {
+      if (!restoreInlineSelection()) return;
+
+      if (command === 'createLink') {
+        const selection = window.getSelection();
+        const selectedText = selection?.toString().trim() || '';
+        const suggested = /^https?:\/\//i.test(selectedText) ? selectedText : 'https://';
+        const url = window.prompt('Link URL', suggested);
+        if (!url) return;
+        document.execCommand('createLink', false, url);
+
+        editorRoot.querySelectorAll('a').forEach((anchor) => {
+          anchor.target = '_blank';
+          anchor.rel = 'noopener noreferrer';
+        });
+      } else if (command === 'highlight') {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
+        const range = selection.getRangeAt(0);
+        const mark = document.createElement('mark');
+        mark.append(range.extractContents());
+        range.insertNode(mark);
+        range.selectNodeContents(mark);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      } else {
+        document.execCommand(command, false);
+      }
+
+      editorRoot.dispatchEvent(new Event('input', { bubbles: true }));
+      hideInlineToolbar();
+    }
+
+    function initializeIconPicker(icons, onSelect) {
+      if (!(iconPicker instanceof HTMLElement) || !(iconButton instanceof HTMLElement)) return;
+
+      iconPicker.replaceChildren();
+      icons.forEach((icon) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = icon;
+        button.setAttribute('aria-label', `Use ${icon} icon`);
+        button.addEventListener('click', () => {
+          onSelect(icon);
+          closeIconPicker();
+        }, { signal });
+        iconPicker.append(button);
+      });
+    }
+
+    function openIconPicker() {
+      if (!(iconPicker instanceof HTMLElement) || !(iconButton instanceof HTMLElement)) return;
+      iconPicker.hidden = false;
+      iconButton.setAttribute('aria-expanded', 'true');
+    }
+
+    function closeIconPicker() {
+      if (!(iconPicker instanceof HTMLElement) || !(iconButton instanceof HTMLElement)) return;
+      iconPicker.hidden = true;
+      iconButton.removeAttribute('aria-expanded');
+    }
+
+    menu.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+    }, { signal });
+
+    menu.addEventListener('click', (event) => {
+      const item = event.target.closest('.menu-item');
+      if (!item) return;
+      activateCommand(item.dataset.command);
+    }, { signal });
+
+    menu.addEventListener('mousemove', (event) => {
+      const item = event.target.closest('.menu-item');
+      if (!item) return;
+      const index = Number.parseInt(item.dataset.menuIndex, 10);
+      if (!Number.isFinite(index) || index === selectedIndex) return;
+      selectedIndex = index;
+      menu.querySelectorAll('.menu-item').forEach((button) => {
+        button.classList.toggle('is-selected', Number(button.dataset.menuIndex) === selectedIndex);
+      });
+    }, { signal });
+
+    menu.addEventListener('wheel', (event) => {
+      event.stopPropagation();
+    }, { passive: true, signal });
+
+    document.addEventListener('keydown', (event) => {
+      if (!menuState || menu.hidden) return;
+
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        moveSelection(1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        moveSelection(-1);
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const command = menuState.items[selectedIndex]?.command;
+        activateCommand(command);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeMenu();
+      }
+    }, { capture: true, signal });
+
+    document.addEventListener('pointerdown', (event) => {
+      if (!menu.hidden && !menu.contains(event.target) && !event.target.closest('[data-drag-handle]')) {
+        closeMenu();
+      }
+
+      if (
+        iconPicker instanceof HTMLElement
+        && !iconPicker.hidden
+        && !iconPicker.contains(event.target)
+        && event.target !== iconButton
+      ) {
+        closeIconPicker();
+      }
+    }, { signal });
+
+    window.addEventListener('resize', positionMenu, { signal });
+    window.addEventListener('scroll', positionMenu, { passive: true, signal });
+
+    if (inlineToolbar instanceof HTMLElement) {
+      inlineToolbar.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+      }, { signal });
+
+      inlineToolbar.addEventListener('click', (event) => {
+        const button = event.target.closest('[data-inline-command]');
+        if (!button) return;
+        applyInlineCommand(button.dataset.inlineCommand);
+      }, { signal });
+    }
+
+    if (iconButton instanceof HTMLElement) {
+      iconButton.addEventListener('click', (event) => {
+        event.stopPropagation();
+        if (iconPicker.hidden) openIconPicker();
+        else closeIconPicker();
+      }, { signal });
+    }
+
+    return Object.freeze({
+      openMenu,
+      closeMenu,
+      showToast,
+      updateInlineToolbar,
+      hideInlineToolbar,
+      initializeIconPicker,
+      openIconPicker,
+      closeIconPicker,
+      destroy() {
+        abortController.abort();
+        window.clearTimeout(toastTimer);
+      }
+    });
+  }
+
+  window.NoteUI = Object.freeze({
+    create: createUI
+  });
+})();
+
+</script>
+  <script>
+/* ===== app.js ===== */
+(() => {
+  'use strict';
+
+  const titleInput = document.getElementById('note-title');
+  const editorRoot = document.getElementById('editor');
+  const iconButton = document.getElementById('icon-button');
+  const iconPicker = document.getElementById('icon-picker');
+  const favicon = document.getElementById('favicon');
+  const blockMenu = document.getElementById('block-menu');
+  const inlineToolbar = document.getElementById('inline-toolbar');
+  const toast = document.getElementById('toast');
+  const copyLinkButton = document.getElementById('copy-link-button');
+  const newNoteButton = document.getElementById('new-note-button');
+
+  const ICONS = [
+    '✏️', '📝', '💡', '📌', '⭐', '🔥',
+    '🚀', '🎯', '📚', '💻', '🛠️', '🎨',
+    '✅', '🧠', '📊', '💰', '🌐', '☕',
+    '🔖', '🗂️', '🧭', '🔬', '📐', '🪴'
+  ];
+
+  let editor = null;
+  let ui = null;
+  let currentIcon = NoteStorage.DEFAULT_NOTE.icon;
+  let saveTimer = null;
+  let isLoading = false;
+
+  function createFaviconUrl(icon) {
+    const svg = `
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <text y="0.9em" font-size="90">${icon}</text>
+      </svg>
+    `.trim();
+    return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+  }
+
+  function setIcon(icon, options = {}) {
+    const { save = true } = options;
+    currentIcon = icon || NoteStorage.DEFAULT_NOTE.icon;
+    iconButton.textContent = currentIcon;
+    favicon.href = createFaviconUrl(currentIcon);
+    if (save) scheduleSave();
+  }
+
+  function updateDocumentTitle() {
+    const title = titleInput.value.trim();
+    document.title = title || 'Untitled';
+  }
+
+  function readCurrentNote() {
+    return {
+      version: NoteStorage.CURRENT_VERSION,
+      title: titleInput.value,
+      icon: currentIcon,
+      blocks: editor.serialize()
+    };
+  }
+
+  function saveNow() {
+    window.clearTimeout(saveTimer);
+    saveTimer = null;
+    if (isLoading || !editor) return;
+
+    try {
+      NoteStorage.writeToUrl(readCurrentNote(), { replace: true });
+      updateDocumentTitle();
+    } catch (error) {
+      console.error('Unable to save the note in the URL.', error);
+      ui?.showToast('This note is too large to save in the URL.');
+    }
+  }
+
+  function scheduleSave() {
+    if (isLoading) return;
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(saveNow, 90);
+  }
+
+  function loadNote(note) {
+    isLoading = true;
+    try {
+      const normalized = NoteStorage.normalizeNote(note);
+      titleInput.value = normalized.title;
+      setIcon(normalized.icon, { save: false });
+      editor.load(normalized.blocks.length ? normalized.blocks : normalized.body);
+      updateDocumentTitle();
+    } finally {
+      isLoading = false;
+    }
+  }
+
+  async function copyCurrentLink() {
+    saveNow();
+
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      ui.showToast('Link copied');
+    } catch {
+      const temporaryInput = document.createElement('textarea');
+      temporaryInput.value = window.location.href;
+      temporaryInput.style.position = 'fixed';
+      temporaryInput.style.opacity = '0';
+      document.body.append(temporaryInput);
+      temporaryInput.select();
+      const copied = document.execCommand('copy');
+      temporaryInput.remove();
+      ui.showToast(copied ? 'Link copied' : 'Unable to copy the link');
+    }
+  }
+
+  function createNewNote() {
+    window.clearTimeout(saveTimer);
+    NoteStorage.clearUrl({ replace: false });
+    loadNote(NoteStorage.cloneDefaultNote());
+    editor.focus();
+  }
+
+  ui = NoteUI.create({
+    menu: blockMenu,
+    inlineToolbar,
+    toast,
+    iconButton,
+    iconPicker,
+    editorRoot,
+    executeEditorCommand(command, block) {
+      editor.executeMenuCommand(command, block);
+    }
+  });
+
+  editor = NoteEditor.create({
+    root: editorRoot,
+    onChange() {
+      scheduleSave();
+    },
+    onRequestMenu(request) {
+      ui.openMenu(request);
+    },
+    onCloseMenu() {
+      ui.closeMenu();
+    },
+    onSelectionChange(selection) {
+      ui.updateInlineToolbar(selection);
+    }
+  });
+
+  ui.initializeIconPicker(ICONS, (icon) => setIcon(icon));
+
+  titleInput.addEventListener('input', () => {
+    updateDocumentTitle();
+    scheduleSave();
+  });
+
+  titleInput.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    editor.focus();
+  });
+
+  copyLinkButton.addEventListener('click', copyCurrentLink);
+  newNoteButton.addEventListener('click', createNewNote);
+
+  window.addEventListener('hashchange', () => {
+    loadNote(NoteStorage.loadFromHash());
+  });
+
+  window.addEventListener('popstate', () => {
+    loadNote(NoteStorage.loadFromHash());
+  });
+
+  window.addEventListener('pagehide', saveNow);
+
+  loadNote(NoteStorage.loadFromHash());
+})();
+
+</script>
 </body>
 </html>
