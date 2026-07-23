@@ -1,24 +1,20 @@
 /**
  * Note-U
- * Version: 0.2.0
+ * Version: 0.2.1
  *
- * Block editor engine.
+ * Block editor controller.
  *
  * This module is responsible for:
- * - rendering the JSON document model;
+ * - rendering document blocks;
  * - editing block content;
- * - creating, deleting and duplicating blocks;
- * - moving blocks;
- * - changing block types;
  * - splitting and merging blocks;
- * - nesting blocks;
- * - checklist state;
- * - slash commands;
- * - block action menus;
- * - focus and caret management.
- *
- * The document model remains the source of truth.
- * The DOM is only a visual representation of that model.
+ * - indenting and outdenting blocks;
+ * - changing block types;
+ * - opening slash commands;
+ * - removing the slash command text after selection;
+ * - handling checklists;
+ * - duplicating, moving and deleting blocks;
+ * - preserving nested block structures.
  */
 
 (function () {
@@ -40,63 +36,106 @@
         "quote"
     ]);
 
-    const BLOCK_TYPE_DEFINITIONS = Object.freeze({
-        paragraph: {
-            name: "Text",
+    const BLOCK_TYPE_DEFINITIONS = Object.freeze([
+        {
+            type: "paragraph",
+            label: "Text",
             description: "Plain text block",
             icon: "T",
-            placeholder: "Type '/' for commands"
+            keywords: [
+                "text",
+                "paragraph",
+                "plain"
+            ]
         },
-
-        "heading-1": {
-            name: "Heading 1",
+        {
+            type: "heading-1",
+            label: "Heading 1",
             description: "Large section heading",
             icon: "H1",
-            placeholder: "Heading 1"
+            keywords: [
+                "heading",
+                "title",
+                "h1"
+            ]
         },
-
-        "heading-2": {
-            name: "Heading 2",
+        {
+            type: "heading-2",
+            label: "Heading 2",
             description: "Medium section heading",
             icon: "H2",
-            placeholder: "Heading 2"
+            keywords: [
+                "heading",
+                "subtitle",
+                "h2"
+            ]
         },
-
-        "bullet-list": {
-            name: "Bulleted list",
-            description: "List with bullet points",
+        {
+            type: "bullet-list",
+            label: "Bulleted list",
+            description: "Create a simple bulleted list",
             icon: "•",
-            placeholder: "List item"
+            keywords: [
+                "bullet",
+                "bulleted",
+                "list",
+                "unordered"
+            ]
         },
-
-        "numbered-list": {
-            name: "Numbered list",
-            description: "Ordered list of items",
+        {
+            type: "numbered-list",
+            label: "Numbered list",
+            description: "Create an ordered list",
             icon: "1.",
-            placeholder: "List item"
+            keywords: [
+                "number",
+                "numbered",
+                "list",
+                "ordered"
+            ]
         },
-
-        checklist: {
-            name: "Checklist",
-            description: "Track completed tasks",
+        {
+            type: "checklist",
+            label: "Checklist",
+            description: "Track a task",
             icon: "☑",
-            placeholder: "To-do"
+            keywords: [
+                "check",
+                "checklist",
+                "task",
+                "todo"
+            ]
         },
-
-        quote: {
-            name: "Quote",
-            description: "Highlighted quotation",
-            icon: "“",
-            placeholder: "Quote"
+        {
+            type: "quote",
+            label: "Quote",
+            description: "Highlight a quotation",
+            icon: "❝",
+            keywords: [
+                "quote",
+                "quotation",
+                "blockquote"
+            ]
         },
-
-        divider: {
-            name: "Divider",
-            description: "Horizontal separator",
+        {
+            type: "divider",
+            label: "Divider",
+            description: "Add a horizontal divider",
             icon: "—",
-            placeholder: ""
+            keywords: [
+                "divider",
+                "line",
+                "separator",
+                "rule"
+            ]
         }
-    });
+    ]);
+
+    const PLACEHOLDER_TEXT =
+        'Type "/" for commands';
+
+    const SLASH_MENU_MARGIN = 10;
+    const SLASH_MENU_GAP = 6;
 
     // =========================================================================
     // Internal state
@@ -108,9 +147,10 @@
 
     let activeBlockId = null;
     let activeMenuBlockId = null;
-    let slashMenuBlockId = null;
-    let slashMenuSelectionIndex = 0;
-    let filteredSlashCommands = [];
+
+    let slashState = null;
+    let slashResults = [];
+    let slashSelectedIndex = 0;
 
     let isInitialized = false;
     let isRendering = false;
@@ -140,15 +180,15 @@
             editorRoot: options.editorRoot,
             blockList: options.blockListElement,
             blockTemplate: options.blockTemplate,
-            blockMenu: document.getElementById("block-menu"),
-            blockTypeMenu: document.getElementById("block-type-menu"),
-            slashMenu: document.getElementById("slash-menu"),
-            slashMenuSearch:
-                document.getElementById("slash-menu-search"),
-            slashMenuList:
-                document.getElementById("slash-menu-list"),
-            slashMenuEmpty:
-                document.getElementById("slash-menu-empty")
+
+            blockMenu:
+                document.getElementById("block-menu"),
+
+            blockTypeMenu:
+                document.getElementById("block-type-menu"),
+
+            slashMenu:
+                document.getElementById("slash-menu")
         };
 
         validateElements();
@@ -159,12 +199,10 @@
                 : null;
 
         currentDocument =
-            window.NoteUStorage.normalizeDocument(
-                options.documentModel
-            );
+            normalizeDocument(options.documentModel);
 
         bindEvents();
-        render();
+        renderDocument();
 
         isInitialized = true;
     }
@@ -173,9 +211,15 @@
      * Validates required editor elements.
      */
     function validateElements() {
-        const missingElements = Object.entries(elements)
-            .filter(([, value]) => !value)
-            .map(([name]) => name);
+        const requiredElements = {
+            editorRoot: elements.editorRoot,
+            blockList: elements.blockList
+        };
+
+        const missingElements =
+            Object.entries(requiredElements)
+                .filter(([, value]) => !value)
+                .map(([name]) => name);
 
         if (missingElements.length > 0) {
             throw new Error(
@@ -203,54 +247,29 @@
      * Registers editor event listeners.
      */
     function bindEvents() {
-        elements.blockList.addEventListener(
+        elements.editorRoot.addEventListener(
             "input",
-            handleBlockInput
+            handleEditorInput
         );
 
-        elements.blockList.addEventListener(
+        elements.editorRoot.addEventListener(
             "keydown",
-            handleBlockKeyDown
+            handleEditorKeyDown
         );
 
-        elements.blockList.addEventListener(
+        elements.editorRoot.addEventListener(
             "click",
-            handleBlockClick
+            handleEditorClick
         );
 
-        elements.blockList.addEventListener(
+        elements.editorRoot.addEventListener(
             "focusin",
-            handleBlockFocusIn
+            handleEditorFocusIn
         );
 
-        elements.blockList.addEventListener(
-            "paste",
-            handleBlockPaste
-        );
-
-        elements.blockMenu.addEventListener(
-            "click",
-            handleBlockMenuClick
-        );
-
-        elements.blockTypeMenu.addEventListener(
-            "click",
-            handleBlockTypeMenuClick
-        );
-
-        elements.slashMenu.addEventListener(
-            "click",
-            handleSlashMenuClick
-        );
-
-        elements.slashMenuSearch.addEventListener(
-            "input",
-            handleSlashMenuSearch
-        );
-
-        elements.slashMenuSearch.addEventListener(
-            "keydown",
-            handleSlashMenuKeyDown
+        elements.editorRoot.addEventListener(
+            "focusout",
+            handleEditorFocusOut
         );
 
         document.addEventListener(
@@ -265,328 +284,432 @@
 
         window.addEventListener(
             "resize",
-            repositionOpenMenus
+            handleWindowResize
         );
 
         window.addEventListener(
             "scroll",
-            repositionOpenMenus,
+            handleWindowScroll,
             {
                 passive: true
             }
         );
+
+        if (elements.blockMenu) {
+            elements.blockMenu.addEventListener(
+                "pointerdown",
+                preserveEditorFocus
+            );
+
+            elements.blockMenu.addEventListener(
+                "click",
+                handleBlockMenuClick
+            );
+        }
+
+        if (elements.blockTypeMenu) {
+            elements.blockTypeMenu.addEventListener(
+                "pointerdown",
+                preserveEditorFocus
+            );
+
+            elements.blockTypeMenu.addEventListener(
+                "click",
+                handleBlockTypeMenuClick
+            );
+        }
+
+        if (elements.slashMenu) {
+            elements.slashMenu.addEventListener(
+                "pointerdown",
+                preserveEditorFocus
+            );
+
+            elements.slashMenu.addEventListener(
+                "click",
+                handleSlashMenuClick
+            );
+        }
+    }
+
+    /**
+     * Prevents menu clicks from moving focus away from the editor.
+     *
+     * @param {PointerEvent} event
+     */
+    function preserveEditorFocus(event) {
+        event.preventDefault();
     }
 
     // =========================================================================
-    // Document API
+    // Document model
     // =========================================================================
 
     /**
-     * Returns a clone of the current document.
+     * Normalizes a document using the storage module.
+     *
+     * @param {*} value
+     * @returns {Object}
+     */
+    function normalizeDocument(value) {
+        if (
+            window.NoteUStorage &&
+            typeof window.NoteUStorage.normalizeDocument ===
+                "function"
+        ) {
+            return window.NoteUStorage.normalizeDocument(
+                value
+            );
+        }
+
+        return value;
+    }
+
+    /**
+     * Creates a new block.
+     *
+     * @param {string} [type]
+     * @param {string} [content]
+     * @returns {Object}
+     */
+    function createBlock(
+        type = DEFAULT_BLOCK_TYPE,
+        content = ""
+    ) {
+        const block = {
+            id: createBlockId(),
+            type:
+                isSupportedBlockType(type)
+                    ? type
+                    : DEFAULT_BLOCK_TYPE,
+            content:
+                type === "divider"
+                    ? ""
+                    : String(content || ""),
+            children: []
+        };
+
+        if (block.type === "checklist") {
+            block.checked = false;
+        }
+
+        return block;
+    }
+
+    /**
+     * Creates a block identifier.
+     *
+     * @returns {string}
+     */
+    function createBlockId() {
+        if (
+            window.NoteUStorage &&
+            typeof window.NoteUStorage.createId ===
+                "function"
+        ) {
+            return window.NoteUStorage.createId();
+        }
+
+        if (
+            window.crypto &&
+            typeof window.crypto.randomUUID === "function"
+        ) {
+            return window.crypto.randomUUID();
+        }
+
+        return `block-${Date.now().toString(36)}-${Math.random()
+            .toString(36)
+            .slice(2, 10)}`;
+    }
+
+    /**
+     * Checks whether a block type is supported.
+     *
+     * @param {string} type
+     * @returns {boolean}
+     */
+    function isSupportedBlockType(type) {
+        return BLOCK_TYPE_DEFINITIONS.some(
+            definition =>
+                definition.type === type
+        );
+    }
+
+    /**
+     * Returns a safe clone of the current document.
      *
      * @returns {Object}
      */
     function getDocument() {
         requireInitialization();
 
-        synchronizeModelFromDom();
+        synchronizeAllBlocksFromDom();
 
-        return window.NoteUStorage.cloneDocument(
-            currentDocument
+        if (
+            window.NoteUStorage &&
+            typeof window.NoteUStorage.cloneDocument ===
+                "function"
+        ) {
+            return window.NoteUStorage.cloneDocument(
+                currentDocument
+            );
+        }
+
+        return JSON.parse(
+            JSON.stringify(currentDocument)
         );
     }
 
     /**
-     * Replaces the current document.
+     * Replaces the editor document.
      *
      * @param {*} nextDocument
      */
     function setDocument(nextDocument) {
-        currentDocument =
-            window.NoteUStorage.normalizeDocument(
-                nextDocument
-            );
+        requireInitialization();
 
         closeAllMenus();
-        render();
+
+        currentDocument =
+            normalizeDocument(nextDocument);
+
+        renderDocument();
     }
 
-    /**
-     * Renders the current document.
-     */
-    function render() {
-        if (!elements) {
-            return;
-        }
+    // =========================================================================
+    // Rendering
+    // =========================================================================
 
+    /**
+     * Renders the complete document.
+     *
+     * @param {Object} [focusOptions]
+     * @param {string} [focusOptions.blockId]
+     * @param {number} [focusOptions.offset]
+     */
+    function renderDocument(focusOptions = {}) {
         isRendering = true;
 
-        try {
-            const fragment =
-                document.createDocumentFragment();
+        const fragment =
+            document.createDocumentFragment();
 
-            currentDocument.blocks.forEach(
-                (block, index) => {
-                    fragment.appendChild(
-                        renderBlock(block, {
-                            index,
-                            parentBlocks:
-                                currentDocument.blocks
-                        })
-                    );
-                }
+        for (const block of currentDocument.blocks) {
+            fragment.appendChild(
+                renderBlock(block)
             );
+        }
 
-            elements.blockList.replaceChildren(fragment);
-            updateNumberedListPrefixes();
-        } finally {
-            isRendering = false;
+        elements.blockList.replaceChildren(fragment);
+
+        renumberLists(elements.blockList);
+
+        isRendering = false;
+
+        if (focusOptions.blockId) {
+            requestAnimationFrame(() => {
+                focusBlock(
+                    focusOptions.blockId,
+                    focusOptions.offset
+                );
+            });
         }
     }
 
     /**
-     * Renders one block recursively.
+     * Renders one block and its descendants.
      *
      * @param {Object} block
-     * @param {Object} context
-     * @param {number} context.index
-     * @param {Array<Object>} context.parentBlocks
      * @returns {HTMLElement}
      */
-    function renderBlock(block, context) {
-        const templateContent =
-            elements.blockTemplate.content.cloneNode(true);
-
+    function renderBlock(block) {
         const blockElement =
-            templateContent.querySelector(".block");
+            document.createElement("div");
 
-        const contentElement =
-            templateContent.querySelector(
-                ".block__content"
-            );
-
-        const prefixElement =
-            templateContent.querySelector(
-                ".block__prefix"
-            );
-
+        blockElement.className = "editor-block";
         blockElement.dataset.blockId = block.id;
         blockElement.dataset.blockType = block.type;
-
-        applyBlockTypeClass(
-            blockElement,
-            block.type
-        );
-
-        contentElement.dataset.blockId = block.id;
-        contentElement.dataset.placeholder =
-            getBlockDefinition(block.type).placeholder;
-
-        contentElement.textContent =
-            typeof block.content === "string"
-                ? block.content
-                : "";
-
-        contentElement.setAttribute(
-            "contenteditable",
-            isEditableBlockType(block.type)
-                ? "true"
-                : "false"
-        );
+        blockElement.dataset.type = block.type;
 
         if (block.type === "checklist") {
-            renderChecklistPrefix(
-                block,
-                blockElement,
-                prefixElement
-            );
+            blockElement.dataset.checked =
+                block.checked ? "true" : "false";
         }
 
-        if (block.type === "numbered-list") {
-            prefixElement.dataset.numberedPrefix = "true";
+        const controls =
+            document.createElement("div");
+
+        controls.className =
+            "editor-block__controls";
+
+        const handleButton =
+            document.createElement("button");
+
+        handleButton.type = "button";
+        handleButton.className =
+            "block-handle block-menu-button";
+        handleButton.dataset.action =
+            "open-block-menu";
+        handleButton.setAttribute(
+            "aria-label",
+            "Open block menu"
+        );
+        handleButton.setAttribute(
+            "title",
+            "Block options"
+        );
+        handleButton.textContent = "⋮⋮";
+
+        controls.appendChild(handleButton);
+
+        const body =
+            document.createElement("div");
+
+        body.className = "editor-block__body";
+
+        const contentRow =
+            document.createElement("div");
+
+        contentRow.className =
+            "block-content-row";
+
+        if (block.type === "checklist") {
+            const checkbox =
+                document.createElement("input");
+
+            checkbox.type = "checkbox";
+            checkbox.className =
+                "checklist-checkbox";
+            checkbox.checked =
+                Boolean(block.checked);
+            checkbox.dataset.action =
+                "toggle-checklist";
+            checkbox.setAttribute(
+                "aria-label",
+                "Mark task as complete"
+            );
+
+            contentRow.appendChild(checkbox);
         }
 
         if (block.type === "divider") {
-            contentElement.setAttribute(
-                "aria-hidden",
+            const divider =
+                document.createElement("div");
+
+            divider.className = "block-divider";
+            divider.setAttribute(
+                "role",
+                "separator"
+            );
+
+            contentRow.appendChild(divider);
+        } else {
+            const content =
+                document.createElement("div");
+
+            content.className = "block-content";
+            content.contentEditable = "true";
+            content.spellcheck = true;
+            content.dataset.placeholder =
+                PLACEHOLDER_TEXT;
+
+            content.setAttribute(
+                "role",
+                "textbox"
+            );
+
+            content.setAttribute(
+                "aria-multiline",
                 "true"
             );
+
+            content.textContent =
+                block.content || "";
+
+            contentRow.appendChild(content);
         }
 
-        const childrenElement =
-            document.createElement("div");
+        body.appendChild(contentRow);
 
-        childrenElement.className =
-            "block__children";
+        if (
+            Array.isArray(block.children) &&
+            block.children.length > 0
+        ) {
+            const childrenContainer =
+                document.createElement("div");
 
-        childrenElement.dataset.parentBlockId =
-            block.id;
+            childrenContainer.className =
+                "block-children";
 
-        if (Array.isArray(block.children)) {
-            block.children.forEach(
-                (childBlock, childIndex) => {
-                    childrenElement.appendChild(
-                        renderBlock(childBlock, {
-                            index: childIndex,
-                            parentBlocks:
-                                block.children
-                        })
-                    );
-                }
+            for (const childBlock of block.children) {
+                childrenContainer.appendChild(
+                    renderBlock(childBlock)
+                );
+            }
+
+            body.appendChild(
+                childrenContainer
             );
         }
 
-        blockElement.appendChild(childrenElement);
+        blockElement.appendChild(controls);
+        blockElement.appendChild(body);
 
         return blockElement;
     }
 
     /**
-     * Renders the checklist checkbox.
+     * Updates ordered-list numbers in a container.
      *
-     * @param {Object} block
-     * @param {HTMLElement} blockElement
-     * @param {HTMLElement} prefixElement
+     * @param {HTMLElement} container
      */
-    function renderChecklistPrefix(
-        block,
-        blockElement,
-        prefixElement
-    ) {
-        const checkbox =
-            document.createElement("input");
+    function renumberLists(container) {
+        let currentNumber = 0;
 
-        checkbox.type = "checkbox";
-        checkbox.className = "block__checkbox";
-        checkbox.checked = Boolean(block.checked);
-        checkbox.dataset.blockId = block.id;
-        checkbox.setAttribute(
-            "aria-label",
-            "Mark task as completed"
-        );
+        for (const child of container.children) {
+            if (
+                !(child instanceof HTMLElement) ||
+                !child.classList.contains(
+                    "editor-block"
+                )
+            ) {
+                continue;
+            }
 
-        blockElement.dataset.checked =
-            checkbox.checked ? "true" : "false";
+            const contentRow =
+                child.querySelector(
+                    ":scope > .editor-block__body > .block-content-row"
+                );
 
-        prefixElement.replaceChildren(checkbox);
-    }
+            if (
+                child.dataset.blockType ===
+                "numbered-list"
+            ) {
+                currentNumber += 1;
 
-    // =========================================================================
-    // Block creation
-    // =========================================================================
-
-    /**
-     * Creates a normalized block.
-     *
-     * @param {string} [type]
-     * @param {Object} [properties]
-     * @returns {Object}
-     */
-    function createBlock(
-        type = DEFAULT_BLOCK_TYPE,
-        properties = {}
-    ) {
-        const normalizedType =
-            normalizeBlockType(type);
-
-        const block = {
-            id: window.NoteUStorage.createId(),
-            type: normalizedType,
-            content:
-                typeof properties.content === "string"
-                    ? properties.content
-                    : "",
-            children: Array.isArray(properties.children)
-                ? properties.children
-                : []
-        };
-
-        if (normalizedType === "checklist") {
-            block.checked =
-                Boolean(properties.checked);
-        }
-
-        return block;
-    }
-
-    /**
-     * Adds a block to the root document.
-     *
-     * @param {Object} [options]
-     * @param {string} [options.type]
-     * @param {boolean} [options.focus]
-     * @returns {Object}
-     */
-    function addBlock(options = {}) {
-        requireInitialization();
-
-        synchronizeModelFromDom();
-
-        const block =
-            createBlock(options.type);
-
-        currentDocument.blocks.push(block);
-
-        render();
-        notifyChange("add-block");
-
-        if (options.focus !== false) {
-            focusBlock(block.id);
-        }
-
-        return block;
-    }
-
-    /**
-     * Inserts a block after another block.
-     *
-     * @param {string} blockId
-     * @param {Object} [options]
-     * @param {string} [options.type]
-     * @param {string} [options.content]
-     * @param {boolean} [options.focus]
-     * @returns {Object|null}
-     */
-    function insertBlockAfter(
-        blockId,
-        options = {}
-    ) {
-        synchronizeModelFromDom();
-
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
-            return null;
-        }
-
-        const block =
-            createBlock(
-                options.type,
-                {
-                    content:
-                        options.content || ""
+                if (contentRow) {
+                    contentRow.dataset.listNumber =
+                        String(currentNumber);
                 }
-            );
+            } else {
+                currentNumber = 0;
+            }
 
-        context.parentBlocks.splice(
-            context.index + 1,
-            0,
-            block
-        );
+            const nestedContainer =
+                child.querySelector(
+                    ":scope > .editor-block__body > .block-children"
+                );
 
-        render();
-        notifyChange("insert-block");
-
-        if (options.focus !== false) {
-            focusBlock(block.id);
+            if (
+                nestedContainer instanceof
+                HTMLElement
+            ) {
+                renumberLists(nestedContainer);
+            }
         }
-
-        return block;
     }
 
     // =========================================================================
-    // Input synchronization
+    // Input handling
     // =========================================================================
 
     /**
@@ -594,163 +717,106 @@
      *
      * @param {InputEvent} event
      */
-    function handleBlockInput(event) {
+    function handleEditorInput(event) {
+        if (isRendering) {
+            return;
+        }
+
         const contentElement =
-            getContentElementFromTarget(
-                event.target
-            );
+            getContentElement(event.target);
 
         if (!contentElement) {
             return;
         }
 
-        const blockId =
-            contentElement.dataset.blockId;
+        const blockElement =
+            getBlockElement(contentElement);
 
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
+        if (!blockElement) {
             return;
         }
 
-        context.block.content =
-            getPlainText(contentElement);
+        activeBlockId =
+            blockElement.dataset.blockId || null;
 
-        notifyChange("edit-block");
-
-        if (
-            context.block.content.startsWith("/") &&
-            !context.block.content.includes("\n")
-        ) {
-            openSlashMenu(
-                blockId,
-                context.block.content.slice(1)
-            );
-        } else {
-            closeSlashMenu();
-        }
+        synchronizeBlockFromDom(blockElement);
+        updateSlashMenu(contentElement);
+        notifyChange("edit-content");
     }
 
     /**
-     * Synchronizes all editable DOM content into the model.
-     */
-    function synchronizeModelFromDom() {
-        if (!elements || isRendering) {
-            return;
-        }
-
-        const contentElements =
-            elements.blockList.querySelectorAll(
-                ".block__content[data-block-id]"
-            );
-
-        for (const contentElement of contentElements) {
-            const blockId =
-                contentElement.dataset.blockId;
-
-            const context =
-                findBlockContext(blockId);
-
-            if (
-                context &&
-                isEditableBlockType(
-                    context.block.type
-                )
-            ) {
-                context.block.content =
-                    getPlainText(contentElement);
-            }
-        }
-
-        const checkboxes =
-            elements.blockList.querySelectorAll(
-                ".block__checkbox[data-block-id]"
-            );
-
-        for (const checkbox of checkboxes) {
-            const context =
-                findBlockContext(
-                    checkbox.dataset.blockId
-                );
-
-            if (context) {
-                context.block.checked =
-                    checkbox.checked;
-            }
-        }
-    }
-
-    // =========================================================================
-    // Keyboard behavior
-    // =========================================================================
-
-    /**
-     * Handles keyboard interaction inside block content.
+     * Handles editor keyboard behavior.
      *
      * @param {KeyboardEvent} event
      */
-    function handleBlockKeyDown(event) {
+    function handleEditorKeyDown(event) {
         const contentElement =
-            getContentElementFromTarget(
-                event.target
-            );
+            getContentElement(event.target);
 
         if (!contentElement) {
             return;
         }
 
-        const blockId =
-            contentElement.dataset.blockId;
+        const blockElement =
+            getBlockElement(contentElement);
+
+        if (!blockElement) {
+            return;
+        }
+
+        activeBlockId =
+            blockElement.dataset.blockId || null;
 
         if (
-            !elements.slashMenu.hidden &&
-            slashMenuBlockId === blockId
+            isSlashMenuOpen() &&
+            handleSlashMenuKeyboard(event)
         ) {
-            if (
-                event.key === "ArrowDown" ||
-                event.key === "ArrowUp" ||
-                event.key === "Enter" ||
-                event.key === "Escape"
-            ) {
-                handleSlashNavigationFromEditor(
-                    event
-                );
-
-                return;
-            }
+            return;
         }
 
         if (event.key === "Enter") {
             if (event.shiftKey) {
+                event.preventDefault();
+                insertPlainTextAtSelection("\n");
+                synchronizeBlockFromDom(
+                    blockElement
+                );
+                notifyChange("insert-line-break");
+                closeSlashMenu();
                 return;
             }
 
             event.preventDefault();
-            splitBlockAtCaret(
-                blockId,
+            splitBlockAtSelection(
+                blockElement,
                 contentElement
             );
-
             return;
         }
 
         if (event.key === "Backspace") {
-            handleBackspaceAtBlockStart(
-                event,
-                blockId,
-                contentElement
-            );
+            if (
+                getCaretOffset(contentElement) === 0
+            ) {
+                event.preventDefault();
+                mergeWithPreviousBlock(
+                    blockElement
+                );
+            }
 
             return;
         }
 
         if (event.key === "Delete") {
-            handleDeleteAtBlockEnd(
-                event,
-                blockId,
-                contentElement
-            );
+            if (
+                getCaretOffset(contentElement) ===
+                getTextLength(contentElement)
+            ) {
+                event.preventDefault();
+                mergeWithNextBlock(
+                    blockElement
+                );
+            }
 
             return;
         }
@@ -759,159 +825,707 @@
             event.preventDefault();
 
             if (event.shiftKey) {
-                outdentBlock(blockId);
+                outdentBlock(blockElement);
             } else {
-                indentBlock(blockId);
+                indentBlock(blockElement);
             }
 
             return;
         }
 
-        if (
-            event.key === "ArrowUp" &&
-            isCaretAtStart(contentElement)
-        ) {
-            const previousBlock =
-                getPreviousBlock(blockId);
-
-            if (previousBlock) {
-                event.preventDefault();
-                focusBlock(
-                    previousBlock.id,
-                    "end"
-                );
-            }
-
-            return;
-        }
-
-        if (
-            event.key === "ArrowDown" &&
-            isCaretAtEnd(contentElement)
-        ) {
-            const nextBlock =
-                getNextBlock(blockId);
-
-            if (nextBlock) {
-                event.preventDefault();
-                focusBlock(
-                    nextBlock.id,
-                    "start"
-                );
-            }
+        if (event.key === "Escape") {
+            closeAllMenus();
         }
     }
 
     /**
-     * Splits a block at the current caret position.
+     * Handles editor clicks.
      *
-     * @param {string} blockId
+     * @param {MouseEvent} event
+     */
+    function handleEditorClick(event) {
+        if (!(event.target instanceof Element)) {
+            return;
+        }
+
+        const blockElement =
+            event.target.closest(
+                ".editor-block"
+            );
+
+        if (blockElement instanceof HTMLElement) {
+            activeBlockId =
+                blockElement.dataset.blockId || null;
+        }
+
+        const actionElement =
+            event.target.closest("[data-action]");
+
+        if (!(actionElement instanceof HTMLElement)) {
+            return;
+        }
+
+        const action =
+            actionElement.dataset.action;
+
+        if (
+            action === "open-block-menu" &&
+            blockElement instanceof HTMLElement
+        ) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            openBlockMenu(
+                blockElement,
+                actionElement
+            );
+
+            return;
+        }
+
+        if (
+            action === "toggle-checklist" &&
+            blockElement instanceof HTMLElement &&
+            actionElement instanceof HTMLInputElement
+        ) {
+            updateChecklistState(
+                blockElement,
+                actionElement.checked
+            );
+        }
+    }
+
+    /**
+     * Tracks the active block.
+     *
+     * @param {FocusEvent} event
+     */
+    function handleEditorFocusIn(event) {
+        const contentElement =
+            getContentElement(event.target);
+
+        if (!contentElement) {
+            return;
+        }
+
+        const blockElement =
+            getBlockElement(contentElement);
+
+        if (!blockElement) {
+            return;
+        }
+
+        activeBlockId =
+            blockElement.dataset.blockId || null;
+    }
+
+    /**
+     * Closes slash commands after editor focus leaves.
+     *
+     * @param {FocusEvent} event
+     */
+    function handleEditorFocusOut(event) {
+        const nextTarget = event.relatedTarget;
+
+        if (
+            nextTarget instanceof Node &&
+            elements.slashMenu &&
+            elements.slashMenu.contains(nextTarget)
+        ) {
+            return;
+        }
+
+        window.setTimeout(() => {
+            const selection =
+                window.getSelection();
+
+            if (
+                !selection ||
+                !selection.anchorNode ||
+                !elements.editorRoot.contains(
+                    selection.anchorNode
+                )
+            ) {
+                closeSlashMenu();
+            }
+        }, 0);
+    }
+
+    // =========================================================================
+    // Slash commands
+    // =========================================================================
+
+    /**
+     * Inspects the current text and opens slash commands when appropriate.
+     *
      * @param {HTMLElement} contentElement
      */
-    function splitBlockAtCaret(
-        blockId,
-        contentElement
-    ) {
-        synchronizeModelFromDom();
+    function updateSlashMenu(contentElement) {
+        const selection =
+            window.getSelection();
 
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
+        if (
+            !selection ||
+            selection.rangeCount === 0 ||
+            !selection.isCollapsed
+        ) {
+            closeSlashMenu();
             return;
         }
 
         const caretOffset =
             getCaretOffset(contentElement);
 
-        const content =
-            context.block.content || "";
+        const text =
+            contentElement.textContent || "";
 
-        const leftContent =
-            content.slice(0, caretOffset);
+        const textBeforeCaret =
+            text.slice(0, caretOffset);
 
-        const rightContent =
-            content.slice(caretOffset);
+        const slashMatch =
+            textBeforeCaret.match(
+                /(?:^|\s)\/([^\s/]*)$/
+            );
 
-        if (
-            content.length === 0 &&
-            context.block.type !== "paragraph"
-        ) {
-            context.block.type = "paragraph";
-
-            if (
-                Object.prototype.hasOwnProperty.call(
-                    context.block,
-                    "checked"
-                )
-            ) {
-                delete context.block.checked;
-            }
-
-            render();
-            notifyChange("reset-empty-block");
-            focusBlock(blockId, "start");
-
+        if (!slashMatch) {
+            closeSlashMenu();
             return;
         }
 
-        context.block.content =
-            leftContent;
+        const query =
+            slashMatch[1].toLowerCase();
+
+        const slashStart =
+            caretOffset -
+            query.length -
+            1;
+
+        slashResults =
+            filterSlashCommands(query);
+
+        if (slashResults.length === 0) {
+            closeSlashMenu();
+            return;
+        }
+
+        const blockElement =
+            getBlockElement(contentElement);
+
+        if (!blockElement) {
+            closeSlashMenu();
+            return;
+        }
+
+        slashState = {
+            blockId:
+                blockElement.dataset.blockId,
+            contentElement,
+            slashStart,
+            caretOffset,
+            query
+        };
+
+        slashSelectedIndex = 0;
+
+        renderSlashMenu();
+        positionSlashMenu();
+    }
+
+    /**
+     * Filters block commands by a slash query.
+     *
+     * @param {string} query
+     * @returns {Array<Object>}
+     */
+    function filterSlashCommands(query) {
+        if (!query) {
+            return [...BLOCK_TYPE_DEFINITIONS];
+        }
+
+        return BLOCK_TYPE_DEFINITIONS.filter(
+            definition => {
+                const searchableText = [
+                    definition.label,
+                    definition.description,
+                    definition.type,
+                    ...definition.keywords
+                ]
+                    .join(" ")
+                    .toLowerCase();
+
+                return searchableText.includes(query);
+            }
+        );
+    }
+
+    /**
+     * Renders the slash menu.
+     */
+    function renderSlashMenu() {
+        if (!elements.slashMenu) {
+            return;
+        }
+
+        const fragment =
+            document.createDocumentFragment();
+
+        const label =
+            document.createElement("div");
+
+        label.className =
+            "slash-menu__label";
+        label.textContent = "Blocks";
+
+        fragment.appendChild(label);
+
+        slashResults.forEach(
+            (definition, index) => {
+                const button =
+                    createTypeMenuButton(
+                        definition,
+                        "slash-menu-item"
+                    );
+
+                button.dataset.slashIndex =
+                    String(index);
+
+                button.setAttribute(
+                    "aria-selected",
+                    index === slashSelectedIndex
+                        ? "true"
+                        : "false"
+                );
+
+                if (
+                    index === slashSelectedIndex
+                ) {
+                    button.classList.add(
+                        "slash-menu-item--active"
+                    );
+                }
+
+                fragment.appendChild(button);
+            }
+        );
+
+        elements.slashMenu.replaceChildren(
+            fragment
+        );
+
+        elements.slashMenu.hidden = false;
+    }
+
+    /**
+     * Positions slash commands near the caret.
+     */
+    function positionSlashMenu() {
+        if (
+            !elements.slashMenu ||
+            !slashState
+        ) {
+            return;
+        }
+
+        const caretRect = getCaretRect();
+
+        const fallbackRect =
+            slashState.contentElement.getBoundingClientRect();
+
+        const anchorRect =
+            caretRect &&
+            (
+                caretRect.width > 0 ||
+                caretRect.height > 0
+            )
+                ? caretRect
+                : fallbackRect;
+
+        const menuWidth =
+            elements.slashMenu.offsetWidth || 290;
+
+        const menuHeight =
+            elements.slashMenu.offsetHeight || 320;
+
+        let left = anchorRect.left;
+        let top =
+            anchorRect.bottom +
+            SLASH_MENU_GAP;
+
+        if (
+            left + menuWidth >
+            window.innerWidth -
+                SLASH_MENU_MARGIN
+        ) {
+            left =
+                window.innerWidth -
+                menuWidth -
+                SLASH_MENU_MARGIN;
+        }
+
+        if (
+            top + menuHeight >
+            window.innerHeight -
+                SLASH_MENU_MARGIN
+        ) {
+            top =
+                anchorRect.top -
+                menuHeight -
+                SLASH_MENU_GAP;
+        }
+
+        left = Math.max(
+            SLASH_MENU_MARGIN,
+            left
+        );
+
+        top = Math.max(
+            SLASH_MENU_MARGIN,
+            top
+        );
+
+        elements.slashMenu.style.left =
+            `${left}px`;
+
+        elements.slashMenu.style.top =
+            `${top}px`;
+
+        elements.slashMenu.style.right =
+            "auto";
+
+        elements.slashMenu.style.bottom =
+            "auto";
+    }
+
+    /**
+     * Handles slash menu keyboard navigation.
+     *
+     * @param {KeyboardEvent} event
+     * @returns {boolean}
+     */
+    function handleSlashMenuKeyboard(event) {
+        if (!isSlashMenuOpen()) {
+            return false;
+        }
+
+        if (event.key === "ArrowDown") {
+            event.preventDefault();
+
+            slashSelectedIndex =
+                (
+                    slashSelectedIndex + 1
+                ) % slashResults.length;
+
+            renderSlashMenu();
+            positionSlashMenu();
+
+            return true;
+        }
+
+        if (event.key === "ArrowUp") {
+            event.preventDefault();
+
+            slashSelectedIndex =
+                (
+                    slashSelectedIndex -
+                    1 +
+                    slashResults.length
+                ) % slashResults.length;
+
+            renderSlashMenu();
+            positionSlashMenu();
+
+            return true;
+        }
+
+        if (
+            event.key === "Enter" ||
+            event.key === "Tab"
+        ) {
+            event.preventDefault();
+
+            const selectedDefinition =
+                slashResults[
+                    slashSelectedIndex
+                ];
+
+            if (selectedDefinition) {
+                applySlashCommand(
+                    selectedDefinition.type
+                );
+            }
+
+            return true;
+        }
+
+        if (event.key === "Escape") {
+            event.preventDefault();
+            closeSlashMenu();
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Handles slash menu pointer selection.
+     *
+     * @param {MouseEvent} event
+     */
+    function handleSlashMenuClick(event) {
+        if (!(event.target instanceof Element)) {
+            return;
+        }
+
+        const button =
+            event.target.closest(
+                "[data-block-type]"
+            );
+
+        if (!(button instanceof HTMLElement)) {
+            return;
+        }
+
+        const blockType =
+            button.dataset.blockType;
+
+        if (!blockType) {
+            return;
+        }
+
+        applySlashCommand(blockType);
+    }
+
+    /**
+     * Applies a slash command.
+     *
+     * The slash character and any typed command query are removed before
+     * changing the block type.
+     *
+     * @param {string} blockType
+     */
+    function applySlashCommand(blockType) {
+        if (
+            !slashState ||
+            !isSupportedBlockType(blockType)
+        ) {
+            closeSlashMenu();
+            return;
+        }
+
+        const {
+            blockId,
+            contentElement,
+            slashStart,
+            caretOffset
+        } = slashState;
+
+        const blockLocation =
+            findBlockLocation(blockId);
+
+        if (!blockLocation) {
+            closeSlashMenu();
+            return;
+        }
+
+        const fullText =
+            contentElement.textContent || "";
+
+        const textBeforeCommand =
+            fullText.slice(0, slashStart);
+
+        const textAfterCommand =
+            fullText.slice(caretOffset);
+
+        const cleanedText =
+            textBeforeCommand +
+            textAfterCommand;
+
+        /*
+         * The block model is updated directly so the slash and query cannot
+         * remain in the content after rendering.
+         */
+        blockLocation.block.content =
+            blockType === "divider"
+                ? ""
+                : cleanedText;
+
+        blockLocation.block.type =
+            blockType;
+
+        if (blockType === "checklist") {
+            blockLocation.block.checked =
+                Boolean(
+                    blockLocation.block.checked
+                );
+        } else {
+            delete blockLocation.block.checked;
+        }
+
+        const nextCaretOffset =
+            Math.min(
+                slashStart,
+                cleanedText.length
+            );
+
+        closeSlashMenu();
+
+        renderDocument({
+            blockId,
+            offset:
+                blockType === "divider"
+                    ? undefined
+                    : nextCaretOffset
+        });
+
+        notifyChange("slash-command");
+    }
+
+    /**
+     * Checks whether the slash menu is open.
+     *
+     * @returns {boolean}
+     */
+    function isSlashMenuOpen() {
+        return Boolean(
+            elements.slashMenu &&
+            !elements.slashMenu.hidden &&
+            slashState
+        );
+    }
+
+    /**
+     * Closes slash commands.
+     */
+    function closeSlashMenu() {
+        slashState = null;
+        slashResults = [];
+        slashSelectedIndex = 0;
+
+        if (elements.slashMenu) {
+            elements.slashMenu.hidden = true;
+            elements.slashMenu.replaceChildren();
+        }
+    }
+
+    // =========================================================================
+    // Block splitting and merging
+    // =========================================================================
+
+    /**
+     * Splits a block at the current caret.
+     *
+     * @param {HTMLElement} blockElement
+     * @param {HTMLElement} contentElement
+     */
+    function splitBlockAtSelection(
+        blockElement,
+        contentElement
+    ) {
+        const blockId =
+            blockElement.dataset.blockId;
+
+        const location =
+            findBlockLocation(blockId);
+
+        if (!location) {
+            return;
+        }
+
+        const text =
+            contentElement.textContent || "";
+
+        const caretOffset =
+            getCaretOffset(contentElement);
+
+        const beforeText =
+            text.slice(0, caretOffset);
+
+        const afterText =
+            text.slice(caretOffset);
+
+        location.block.content =
+            beforeText;
+
+        const nextType =
+            shouldContinueBlockType(
+                location.block.type,
+                afterText
+            )
+                ? location.block.type
+                : DEFAULT_BLOCK_TYPE;
 
         const nextBlock =
             createBlock(
-                getContinuationBlockType(
-                    context.block.type
-                ),
-                {
-                    content: rightContent
-                }
+                nextType,
+                afterText
             );
 
-        context.parentBlocks.splice(
-            context.index + 1,
+        if (
+            nextType === "checklist"
+        ) {
+            nextBlock.checked = false;
+        }
+
+        location.collection.splice(
+            location.index + 1,
             0,
             nextBlock
         );
 
-        render();
+        closeAllMenus();
+
+        renderDocument({
+            blockId: nextBlock.id,
+            offset: 0
+        });
+
         notifyChange("split-block");
-        focusBlock(nextBlock.id, "start");
     }
 
     /**
-     * Handles Backspace at the start of a block.
+     * Determines whether Enter should preserve the current block type.
      *
-     * @param {KeyboardEvent} event
-     * @param {string} blockId
-     * @param {HTMLElement} contentElement
+     * @param {string} type
+     * @param {string} remainingText
+     * @returns {boolean}
      */
-    function handleBackspaceAtBlockStart(
-        event,
-        blockId,
-        contentElement
+    function shouldContinueBlockType(
+        type,
+        remainingText
     ) {
-        if (!isCaretAtStart(contentElement)) {
-            return;
-        }
-
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
-            return;
+        if (
+            type === "bullet-list" ||
+            type === "numbered-list" ||
+            type === "checklist"
+        ) {
+            return true;
         }
 
         if (
-            context.block.content === "" &&
-            context.block.type !== "paragraph"
+            type === "heading-1" ||
+            type === "heading-2" ||
+            type === "quote"
         ) {
-            event.preventDefault();
-            changeBlockType(
-                blockId,
-                "paragraph"
-            );
+            return remainingText.length > 0;
+        }
 
+        return type === "paragraph";
+    }
+
+    /**
+     * Merges the current block into the previous block.
+     *
+     * @param {HTMLElement} blockElement
+     */
+    function mergeWithPreviousBlock(blockElement) {
+        const blockId =
+            blockElement.dataset.blockId;
+
+        const currentLocation =
+            findBlockLocation(blockId);
+
+        if (!currentLocation) {
             return;
         }
 
@@ -922,23 +1536,65 @@
             return;
         }
 
-        event.preventDefault();
-        mergeBlockWithPrevious(blockId);
+        if (previousBlock.type === "divider") {
+            removeBlockById(previousBlock.id);
+
+            renderDocument({
+                blockId,
+                offset: 0
+            });
+
+            notifyChange("delete-divider");
+            return;
+        }
+
+        synchronizeBlockFromDom(blockElement);
+
+        const previousLength =
+            previousBlock.content.length;
+
+        previousBlock.content +=
+            currentLocation.block.content;
+
+        if (
+            Array.isArray(
+                currentLocation.block.children
+            ) &&
+            currentLocation.block.children.length > 0
+        ) {
+            previousBlock.children.push(
+                ...currentLocation.block.children
+            );
+        }
+
+        currentLocation.collection.splice(
+            currentLocation.index,
+            1
+        );
+
+        closeAllMenus();
+
+        renderDocument({
+            blockId: previousBlock.id,
+            offset: previousLength
+        });
+
+        notifyChange("merge-block");
     }
 
     /**
-     * Handles Delete at the end of a block.
+     * Merges the next block into the current block.
      *
-     * @param {KeyboardEvent} event
-     * @param {string} blockId
-     * @param {HTMLElement} contentElement
+     * @param {HTMLElement} blockElement
      */
-    function handleDeleteAtBlockEnd(
-        event,
-        blockId,
-        contentElement
-    ) {
-        if (!isCaretAtEnd(contentElement)) {
+    function mergeWithNextBlock(blockElement) {
+        const blockId =
+            blockElement.dataset.blockId;
+
+        const currentLocation =
+            findBlockLocation(blockId);
+
+        if (!currentLocation) {
             return;
         }
 
@@ -949,866 +1605,261 @@
             return;
         }
 
-        event.preventDefault();
-        mergeNextBlockIntoCurrent(blockId);
-    }
+        if (nextBlock.type === "divider") {
+            removeBlockById(nextBlock.id);
 
-    // =========================================================================
-    // Block merging
-    // =========================================================================
+            renderDocument({
+                blockId,
+                offset:
+                    currentLocation.block.content.length
+            });
 
-    /**
-     * Merges a block into the previous visible block.
-     *
-     * @param {string} blockId
-     */
-    function mergeBlockWithPrevious(blockId) {
-        synchronizeModelFromDom();
-
-        const context =
-            findBlockContext(blockId);
-
-        const previousBlock =
-            getPreviousBlock(blockId);
-
-        if (
-            !context ||
-            !previousBlock ||
-            previousBlock.type === "divider"
-        ) {
+            notifyChange("delete-divider");
             return;
         }
 
-        const previousLength =
-            previousBlock.content.length;
-
-        previousBlock.content +=
-            context.block.content;
-
-        if (
-            Array.isArray(context.block.children) &&
-            context.block.children.length > 0
-        ) {
-            previousBlock.children.push(
-                ...context.block.children
-            );
-        }
-
-        context.parentBlocks.splice(
-            context.index,
-            1
-        );
-
-        ensureDocumentHasBlock();
-
-        render();
-        notifyChange("merge-block");
-        focusBlock(
-            previousBlock.id,
-            previousLength
-        );
-    }
-
-    /**
-     * Merges the next visible block into the current block.
-     *
-     * @param {string} blockId
-     */
-    function mergeNextBlockIntoCurrent(blockId) {
-        synchronizeModelFromDom();
-
-        const currentContext =
-            findBlockContext(blockId);
-
-        const nextBlock =
-            getNextBlock(blockId);
-
-        if (
-            !currentContext ||
-            !nextBlock ||
-            currentContext.block.type === "divider"
-        ) {
-            return;
-        }
+        synchronizeBlockFromDom(blockElement);
 
         const currentLength =
-            currentContext.block.content.length;
+            currentLocation.block.content.length;
 
-        currentContext.block.content +=
+        currentLocation.block.content +=
             nextBlock.content;
 
         if (
             Array.isArray(nextBlock.children) &&
             nextBlock.children.length > 0
         ) {
-            currentContext.block.children.push(
+            currentLocation.block.children.push(
                 ...nextBlock.children
             );
         }
 
-        removeBlockFromModel(nextBlock.id);
-        ensureDocumentHasBlock();
+        removeBlockById(nextBlock.id);
 
-        render();
-        notifyChange("merge-next-block");
-        focusBlock(
-            currentContext.block.id,
-            currentLength
-        );
+        closeAllMenus();
+
+        renderDocument({
+            blockId,
+            offset: currentLength
+        });
+
+        notifyChange("merge-block");
     }
 
     // =========================================================================
-    // Block deletion and duplication
+    // Indentation
     // =========================================================================
 
     /**
-     * Removes a block.
+     * Nests a block below its previous sibling.
      *
-     * @param {string} blockId
-     * @param {Object} [options]
-     * @param {boolean} [options.focus]
-     * @returns {boolean}
+     * @param {HTMLElement} blockElement
      */
-    function removeBlock(
-        blockId,
-        options = {}
-    ) {
-        synchronizeModelFromDom();
+    function indentBlock(blockElement) {
+        const blockId =
+            blockElement.dataset.blockId;
 
-        const previousBlock =
-            getPreviousBlock(blockId);
+        const location =
+            findBlockLocation(blockId);
 
-        const nextBlock =
-            getNextBlock(blockId);
-
-        const removed =
-            removeBlockFromModel(blockId);
-
-        if (!removed) {
-            return false;
-        }
-
-        ensureDocumentHasBlock();
-
-        render();
-        notifyChange("delete-block");
-
-        if (options.focus !== false) {
-            const focusTarget =
-                previousBlock ||
-                nextBlock ||
-                currentDocument.blocks[0];
-
-            if (focusTarget) {
-                focusBlock(
-                    focusTarget.id,
-                    previousBlock ? "end" : "start"
-                );
-            }
-        }
-
-        return true;
-    }
-
-    /**
-     * Removes a block directly from the model.
-     *
-     * @param {string} blockId
-     * @returns {boolean}
-     */
-    function removeBlockFromModel(blockId) {
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
-            return false;
-        }
-
-        context.parentBlocks.splice(
-            context.index,
-            1
-        );
-
-        return true;
-    }
-
-    /**
-     * Duplicates a block and its children.
-     *
-     * @param {string} blockId
-     */
-    function duplicateBlock(blockId) {
-        synchronizeModelFromDom();
-
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
+        if (
+            !location ||
+            location.index === 0
+        ) {
             return;
         }
 
-        const duplicate =
-            cloneBlockWithNewIds(
-                context.block
-            );
-
-        context.parentBlocks.splice(
-            context.index + 1,
-            0,
-            duplicate
-        );
-
-        render();
-        notifyChange("duplicate-block");
-        focusBlock(duplicate.id, "end");
-    }
-
-    /**
-     * Clones a block tree using new identifiers.
-     *
-     * @param {Object} block
-     * @returns {Object}
-     */
-    function cloneBlockWithNewIds(block) {
-        const clone = {
-            ...block,
-            id: window.NoteUStorage.createId(),
-            children: Array.isArray(block.children)
-                ? block.children.map(
-                    cloneBlockWithNewIds
-                )
-                : []
-        };
-
-        return clone;
-    }
-
-    // =========================================================================
-    // Block movement
-    // =========================================================================
-
-    /**
-     * Moves a block up among its siblings.
-     *
-     * @param {string} blockId
-     * @returns {boolean}
-     */
-    function moveBlockUp(blockId) {
-        synchronizeModelFromDom();
-
-        const context =
-            findBlockContext(blockId);
-
-        if (!context || context.index <= 0) {
-            return false;
-        }
-
-        const previousIndex =
-            context.index - 1;
-
-        [
-            context.parentBlocks[previousIndex],
-            context.parentBlocks[context.index]
-        ] = [
-            context.parentBlocks[context.index],
-            context.parentBlocks[previousIndex]
-        ];
-
-        render();
-        notifyChange("move-block-up");
-        focusBlock(blockId);
-
-        return true;
-    }
-
-    /**
-     * Moves a block down among its siblings.
-     *
-     * @param {string} blockId
-     * @returns {boolean}
-     */
-    function moveBlockDown(blockId) {
-        synchronizeModelFromDom();
-
-        const context =
-            findBlockContext(blockId);
-
-        if (
-            !context ||
-            context.index >=
-                context.parentBlocks.length - 1
-        ) {
-            return false;
-        }
-
-        const nextIndex =
-            context.index + 1;
-
-        [
-            context.parentBlocks[nextIndex],
-            context.parentBlocks[context.index]
-        ] = [
-            context.parentBlocks[context.index],
-            context.parentBlocks[nextIndex]
-        ];
-
-        render();
-        notifyChange("move-block-down");
-        focusBlock(blockId);
-
-        return true;
-    }
-
-    // =========================================================================
-    // Block nesting
-    // =========================================================================
-
-    /**
-     * Indents a block under its previous sibling.
-     *
-     * @param {string} blockId
-     * @returns {boolean}
-     */
-    function indentBlock(blockId) {
-        synchronizeModelFromDom();
-
-        const context =
-            findBlockContext(blockId);
-
-        if (!context || context.index <= 0) {
-            return false;
-        }
-
         const previousSibling =
-            context.parentBlocks[
-                context.index - 1
+            location.collection[
+                location.index - 1
             ];
 
         const [block] =
-            context.parentBlocks.splice(
-                context.index,
+            location.collection.splice(
+                location.index,
                 1
             );
 
-        previousSibling.children =
-            Array.isArray(
-                previousSibling.children
-            )
-                ? previousSibling.children
-                : [];
-
         previousSibling.children.push(block);
 
-        render();
-        notifyChange("indent-block");
-        focusBlock(blockId);
+        closeAllMenus();
 
-        return true;
+        renderDocument({
+            blockId,
+            offset:
+                block.type === "divider"
+                    ? undefined
+                    : block.content.length
+        });
+
+        notifyChange("indent-block");
     }
 
     /**
      * Moves a nested block one level outward.
      *
-     * @param {string} blockId
-     * @returns {boolean}
+     * @param {HTMLElement} blockElement
      */
-    function outdentBlock(blockId) {
-        synchronizeModelFromDom();
+    function outdentBlock(blockElement) {
+        const blockId =
+            blockElement.dataset.blockId;
 
-        const context =
-            findBlockContext(blockId);
+        const location =
+            findBlockLocation(blockId);
 
         if (
-            !context ||
-            !context.parentBlock
+            !location ||
+            !location.parentBlock
         ) {
-            return false;
+            return;
         }
 
-        const parentContext =
-            findBlockContext(
-                context.parentBlock.id
+        const parentLocation =
+            findBlockLocation(
+                location.parentBlock.id
             );
 
-        if (!parentContext) {
-            return false;
+        if (!parentLocation) {
+            return;
         }
 
         const [block] =
-            context.parentBlocks.splice(
-                context.index,
+            location.collection.splice(
+                location.index,
                 1
             );
 
-        parentContext.parentBlocks.splice(
-            parentContext.index + 1,
+        parentLocation.collection.splice(
+            parentLocation.index + 1,
             0,
             block
         );
 
-        render();
-        notifyChange("outdent-block");
-        focusBlock(blockId);
-
-        return true;
-    }
-
-    // =========================================================================
-    // Block types
-    // =========================================================================
-
-    /**
-     * Changes a block type.
-     *
-     * @param {string} blockId
-     * @param {string} nextType
-     * @returns {boolean}
-     */
-    function changeBlockType(
-        blockId,
-        nextType
-    ) {
-        synchronizeModelFromDom();
-
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
-            return false;
-        }
-
-        const normalizedType =
-            normalizeBlockType(nextType);
-
-        context.block.type =
-            normalizedType;
-
-        if (normalizedType === "checklist") {
-            context.block.checked =
-                Boolean(context.block.checked);
-        } else if (
-            Object.prototype.hasOwnProperty.call(
-                context.block,
-                "checked"
-            )
-        ) {
-            delete context.block.checked;
-        }
-
-        if (normalizedType === "divider") {
-            context.block.content = "";
-        }
-
         closeAllMenus();
-        render();
-        notifyChange("change-block-type");
 
-        if (isEditableBlockType(normalizedType)) {
-            focusBlock(blockId, "end");
-        }
+        renderDocument({
+            blockId,
+            offset:
+                block.type === "divider"
+                    ? undefined
+                    : block.content.length
+        });
 
-        return true;
+        notifyChange("outdent-block");
     }
 
-    /**
-     * Returns the continuation type created by Enter.
-     *
-     * @param {string} blockType
-     * @returns {string}
-     */
-    function getContinuationBlockType(
-        blockType
-    ) {
-        if (
-            blockType === "bullet-list" ||
-            blockType === "numbered-list" ||
-            blockType === "checklist"
-        ) {
-            return blockType;
-        }
-
-        return "paragraph";
-    }
+    // =========================================================================
+    // Block menus
+    // =========================================================================
 
     /**
-     * Applies a block type class.
+     * Opens the main block menu.
      *
      * @param {HTMLElement} blockElement
-     * @param {string} blockType
+     * @param {HTMLElement} anchorElement
      */
-    function applyBlockTypeClass(
+    function openBlockMenu(
         blockElement,
-        blockType
+        anchorElement
     ) {
-        for (
-            const type of
-            Object.keys(BLOCK_TYPE_DEFINITIONS)
-        ) {
-            blockElement.classList.remove(
-                `block--${type}`
-            );
-        }
-
-        blockElement.classList.add(
-            `block--${blockType}`
-        );
-    }
-
-    /**
-     * Returns a normalized block type.
-     *
-     * @param {*} blockType
-     * @returns {string}
-     */
-    function normalizeBlockType(blockType) {
-        return Object.prototype.hasOwnProperty.call(
-            BLOCK_TYPE_DEFINITIONS,
-            blockType
-        )
-            ? blockType
-            : DEFAULT_BLOCK_TYPE;
-    }
-
-    /**
-     * Returns a block type definition.
-     *
-     * @param {string} blockType
-     * @returns {Object}
-     */
-    function getBlockDefinition(blockType) {
-        return BLOCK_TYPE_DEFINITIONS[
-            normalizeBlockType(blockType)
-        ];
-    }
-
-    /**
-     * Checks whether a block is editable.
-     *
-     * @param {string} blockType
-     * @returns {boolean}
-     */
-    function isEditableBlockType(blockType) {
-        return EDITABLE_BLOCK_TYPES.includes(
-            blockType
-        );
-    }
-
-    // =========================================================================
-    // Block click behavior
-    // =========================================================================
-
-    /**
-     * Handles block control and checkbox clicks.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleBlockClick(event) {
-        if (!(event.target instanceof Element)) {
+        if (!elements.blockMenu) {
             return;
         }
 
-        const checkbox =
-            event.target.closest(
-                ".block__checkbox"
-            );
+        closeSlashMenu();
+        closeBlockTypeMenu();
 
-        if (
-            checkbox instanceof
-            HTMLInputElement
-        ) {
-            handleChecklistChange(checkbox);
-            return;
-        }
+        activeMenuBlockId =
+            blockElement.dataset.blockId;
 
-        const addButton =
-            event.target.closest(
-                ".block__add-button"
-            );
-
-        if (
-            addButton instanceof
-            HTMLButtonElement
-        ) {
-            const blockElement =
-                addButton.closest(".block");
-
-            if (blockElement) {
-                insertBlockAfter(
-                    blockElement.dataset.blockId,
-                    {
-                        focus: true
-                    }
-                );
-            }
-
-            return;
-        }
-
-        const handleButton =
-            event.target.closest(
-                ".block__handle"
-            );
-
-        if (
-            handleButton instanceof
-            HTMLButtonElement
-        ) {
-            const blockElement =
-                handleButton.closest(".block");
-
-            if (blockElement) {
-                openBlockMenu(
-                    blockElement.dataset.blockId,
-                    handleButton
-                );
-            }
-        }
-    }
-
-    /**
-     * Handles checklist changes.
-     *
-     * @param {HTMLInputElement} checkbox
-     */
-    function handleChecklistChange(checkbox) {
-        const blockId =
-            checkbox.dataset.blockId;
-
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
-            return;
-        }
-
-        context.block.checked =
-            checkbox.checked;
-
-        const blockElement =
-            getBlockElement(blockId);
-
-        if (blockElement) {
-            blockElement.dataset.checked =
-                checkbox.checked
-                    ? "true"
-                    : "false";
-        }
-
-        notifyChange("toggle-checklist");
-    }
-
-    /**
-     * Tracks the active block.
-     *
-     * @param {FocusEvent} event
-     */
-    function handleBlockFocusIn(event) {
-        const blockElement =
-            getBlockElementFromTarget(
-                event.target
-            );
-
-        if (blockElement) {
-            activeBlockId =
-                blockElement.dataset.blockId;
-        }
-    }
-
-    // =========================================================================
-    // Plain-text paste
-    // =========================================================================
-
-    /**
-     * Inserts pasted content as plain text.
-     *
-     * @param {ClipboardEvent} event
-     */
-    function handleBlockPaste(event) {
-        const contentElement =
-            getContentElementFromTarget(
-                event.target
-            );
-
-        if (!contentElement) {
-            return;
-        }
-
-        event.preventDefault();
-
-        const text =
-            event.clipboardData?.getData(
-                "text/plain"
-            ) || "";
-
-        insertTextAtSelection(text);
-    }
-
-    /**
-     * Inserts text at the active selection.
-     *
-     * @param {string} text
-     */
-    function insertTextAtSelection(text) {
-        const selection =
-            window.getSelection();
-
-        if (
-            !selection ||
-            selection.rangeCount === 0
-        ) {
-            return;
-        }
-
-        const range =
-            selection.getRangeAt(0);
-
-        range.deleteContents();
-
-        const textNode =
-            document.createTextNode(text);
-
-        range.insertNode(textNode);
-        range.setStartAfter(textNode);
-        range.collapse(true);
-
-        selection.removeAllRanges();
-        selection.addRange(range);
-
-        const target =
-            range.startContainer.parentElement;
-
-        const contentElement =
-            getContentElementFromTarget(target);
-
-        if (contentElement) {
-            contentElement.dispatchEvent(
-                new InputEvent(
-                    "input",
-                    {
-                        bubbles: true,
-                        inputType:
-                            "insertFromPaste",
-                        data: text
-                    }
-                )
-            );
-        }
-    }
-
-    // =========================================================================
-    // Block action menu
-    // =========================================================================
-
-    /**
-     * Opens the block action menu.
-     *
-     * @param {string} blockId
-     * @param {HTMLElement} anchor
-     */
-    function openBlockMenu(blockId, anchor) {
-        closeAllMenus();
-
-        activeMenuBlockId = blockId;
-
-        const blockElement =
-            getBlockElement(blockId);
-
-        if (blockElement) {
-            blockElement.dataset.menuOpen =
-                "true";
-        }
-
-        const handleButton =
-            blockElement?.querySelector(
-                ".block__handle"
-            );
-
-        if (handleButton) {
-            handleButton.setAttribute(
-                "aria-expanded",
-                "true"
-            );
-        }
-
-        updateBlockMenuAvailability(blockId);
+        populateBlockMenu();
 
         elements.blockMenu.hidden = false;
 
-        positionPopover(
+        positionMenu(
             elements.blockMenu,
-            anchor.getBoundingClientRect(),
-            {
-                horizontal: "left",
-                vertical: "bottom"
-            }
+            anchorElement.getBoundingClientRect()
         );
-
-        requestAnimationFrame(() => {
-            elements.blockMenu
-                .querySelector(
-                    ".block-menu__item:not([disabled])"
-                )
-                ?.focus();
-        });
     }
 
     /**
-     * Closes the block action menu.
+     * Populates the block menu.
      */
-    function closeBlockMenu() {
-        if (activeMenuBlockId) {
-            const blockElement =
-                getBlockElement(
-                    activeMenuBlockId
-                );
-
-            if (blockElement) {
-                delete blockElement.dataset.menuOpen;
-
-                blockElement
-                    .querySelector(
-                        ".block__handle"
-                    )
-                    ?.setAttribute(
-                        "aria-expanded",
-                        "false"
-                    );
-            }
-        }
-
-        elements.blockMenu.hidden = true;
-        activeMenuBlockId = null;
-    }
-
-    /**
-     * Updates disabled menu actions.
-     *
-     * @param {string} blockId
-     */
-    function updateBlockMenuAvailability(blockId) {
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
+    function populateBlockMenu() {
+        if (!elements.blockMenu) {
             return;
         }
 
-        const moveUpButton =
-            elements.blockMenu.querySelector(
-                '[data-block-action="move-up"]'
-            );
+        const actions = [
+            {
+                action: "change-type",
+                label: "Turn into",
+                icon: "↻"
+            },
+            {
+                action: "duplicate",
+                label: "Duplicate",
+                icon: "⧉"
+            },
+            {
+                action: "move-up",
+                label: "Move up",
+                icon: "↑"
+            },
+            {
+                action: "move-down",
+                label: "Move down",
+                icon: "↓"
+            },
+            {
+                action: "delete",
+                label: "Delete",
+                icon: "⌫",
+                danger: true
+            }
+        ];
 
-        const moveDownButton =
-            elements.blockMenu.querySelector(
-                '[data-block-action="move-down"]'
-            );
+        const fragment =
+            document.createDocumentFragment();
 
-        moveUpButton.disabled =
-            context.index === 0;
+        for (const item of actions) {
+            const button =
+                document.createElement("button");
 
-        moveDownButton.disabled =
-            context.index ===
-            context.parentBlocks.length - 1;
+            button.type = "button";
+            button.className =
+                "block-menu-item";
+            button.dataset.action =
+                item.action;
+
+            if (item.danger) {
+                button.classList.add(
+                    "block-menu-item--danger"
+                );
+            }
+
+            const icon =
+                document.createElement("span");
+
+            icon.className =
+                "block-menu-item__icon";
+            icon.textContent = item.icon;
+
+            const label =
+                document.createElement("span");
+
+            label.className =
+                "block-menu-item__title";
+            label.textContent = item.label;
+
+            button.append(icon, label);
+            fragment.appendChild(button);
+        }
+
+        elements.blockMenu.replaceChildren(
+            fragment
+        );
     }
 
     /**
@@ -1823,28 +1874,32 @@
 
         const button =
             event.target.closest(
-                "[data-block-action]"
+                "[data-action]"
             );
 
-        if (
-            !(button instanceof HTMLButtonElement) ||
-            button.disabled ||
-            !activeMenuBlockId
-        ) {
+        if (!(button instanceof HTMLElement)) {
             return;
         }
 
-        const blockId =
-            activeMenuBlockId;
-
         const action =
-            button.dataset.blockAction;
+            button.dataset.action;
 
-        if (action === "turn-into") {
-            openBlockTypeMenu(
-                blockId,
-                button
+        if (!activeMenuBlockId || !action) {
+            return;
+        }
+
+        const blockElement =
+            getBlockElementById(
+                activeMenuBlockId
             );
+
+        if (action === "change-type") {
+            if (blockElement) {
+                openBlockTypeMenu(
+                    blockElement,
+                    button
+                );
+            }
 
             return;
         }
@@ -1852,83 +1907,120 @@
         closeBlockMenu();
 
         if (action === "duplicate") {
-            duplicateBlock(blockId);
-        }
-
-        if (action === "move-up") {
-            moveBlockUp(blockId);
-        }
-
-        if (action === "move-down") {
-            moveBlockDown(blockId);
-        }
-
-        if (action === "delete") {
-            removeBlock(blockId);
+            duplicateBlock(activeMenuBlockId);
+        } else if (action === "move-up") {
+            moveBlock(activeMenuBlockId, -1);
+        } else if (action === "move-down") {
+            moveBlock(activeMenuBlockId, 1);
+        } else if (action === "delete") {
+            deleteBlock(activeMenuBlockId);
         }
     }
-
-    // =========================================================================
-    // Block type menu
-    // =========================================================================
 
     /**
      * Opens the block type menu.
      *
-     * @param {string} blockId
-     * @param {HTMLElement} anchor
+     * @param {HTMLElement} blockElement
+     * @param {HTMLElement} anchorElement
      */
     function openBlockTypeMenu(
-        blockId,
-        anchor
+        blockElement,
+        anchorElement
     ) {
-        activeMenuBlockId = blockId;
-
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
+        if (!elements.blockTypeMenu) {
             return;
         }
 
+        activeMenuBlockId =
+            blockElement.dataset.blockId;
+
+        const fragment =
+            document.createDocumentFragment();
+
         for (
-            const button of
-            elements.blockTypeMenu.querySelectorAll(
-                "[data-block-type]"
-            )
+            const definition of
+            BLOCK_TYPE_DEFINITIONS
         ) {
-            button.dataset.active =
-                button.dataset.blockType ===
-                context.block.type
-                    ? "true"
-                    : "false";
+            fragment.appendChild(
+                createTypeMenuButton(
+                    definition,
+                    "block-type-menu-item"
+                )
+            );
         }
+
+        elements.blockTypeMenu.replaceChildren(
+            fragment
+        );
 
         elements.blockTypeMenu.hidden = false;
 
-        positionPopover(
+        positionMenu(
             elements.blockTypeMenu,
-            anchor.getBoundingClientRect(),
-            {
-                horizontal: "right",
-                vertical: "top"
-            }
+            anchorElement.getBoundingClientRect()
         );
-
-        requestAnimationFrame(() => {
-            elements.blockTypeMenu
-                .querySelector(
-                    '[data-active="true"]'
-                )
-                ?.focus();
-        });
     }
 
     /**
-     * Closes the block type menu.
+     * Creates a menu button for a block type.
+     *
+     * @param {Object} definition
+     * @param {string} className
+     * @returns {HTMLButtonElement}
      */
-    function closeBlockTypeMenu() {
-        elements.blockTypeMenu.hidden = true;
+    function createTypeMenuButton(
+        definition,
+        className
+    ) {
+        const button =
+            document.createElement("button");
+
+        button.type = "button";
+        button.className = className;
+        button.dataset.blockType =
+            definition.type;
+
+        const icon =
+            document.createElement("span");
+
+        icon.className =
+            `${className}__icon`;
+        icon.textContent =
+            definition.icon;
+
+        const content =
+            document.createElement("span");
+
+        content.className =
+            `${className}__content`;
+
+        const title =
+            document.createElement("span");
+
+        title.className =
+            `${className}__title`;
+        title.textContent =
+            definition.label;
+
+        const description =
+            document.createElement("span");
+
+        description.className =
+            `${className}__description`;
+        description.textContent =
+            definition.description;
+
+        content.append(
+            title,
+            description
+        );
+
+        button.append(
+            icon,
+            content
+        );
+
+        return button;
     }
 
     /**
@@ -1946,588 +2038,399 @@
                 "[data-block-type]"
             );
 
+        if (!(button instanceof HTMLElement)) {
+            return;
+        }
+
+        const blockType =
+            button.dataset.blockType;
+
         if (
-            !(button instanceof HTMLButtonElement) ||
-            !activeMenuBlockId
+            !activeMenuBlockId ||
+            !blockType
         ) {
             return;
         }
 
         changeBlockType(
             activeMenuBlockId,
-            button.dataset.blockType
-        );
-    }
-
-    // =========================================================================
-    // Slash menu
-    // =========================================================================
-
-    /**
-     * Opens the slash command menu.
-     *
-     * @param {string} blockId
-     * @param {string} searchQuery
-     */
-    function openSlashMenu(
-        blockId,
-        searchQuery = ""
-    ) {
-        slashMenuBlockId = blockId;
-        slashMenuSelectionIndex = 0;
-
-        elements.slashMenuSearch.value =
-            searchQuery;
-
-        renderSlashMenu(searchQuery);
-
-        const contentElement =
-            getContentElement(blockId);
-
-        if (!contentElement) {
-            return;
-        }
-
-        elements.slashMenu.hidden = false;
-
-        positionPopover(
-            elements.slashMenu,
-            contentElement.getBoundingClientRect(),
-            {
-                horizontal: "left",
-                vertical: "bottom"
-            }
-        );
-    }
-
-    /**
-     * Closes the slash command menu.
-     */
-    function closeSlashMenu() {
-        elements.slashMenu.hidden = true;
-        slashMenuBlockId = null;
-        slashMenuSelectionIndex = 0;
-        filteredSlashCommands = [];
-        elements.slashMenuSearch.value = "";
-    }
-
-    /**
-     * Renders slash command search results.
-     *
-     * @param {string} searchQuery
-     */
-    function renderSlashMenu(searchQuery = "") {
-        const normalizedQuery =
-            searchQuery.trim().toLowerCase();
-
-        filteredSlashCommands =
-            Object.entries(
-                BLOCK_TYPE_DEFINITIONS
-            )
-                .map(([type, definition]) => ({
-                    type,
-                    ...definition
-                }))
-                .filter(command => {
-                    if (!normalizedQuery) {
-                        return true;
-                    }
-
-                    return [
-                        command.type,
-                        command.name,
-                        command.description
-                    ].some(value =>
-                        value
-                            .toLowerCase()
-                            .includes(
-                                normalizedQuery
-                            )
-                    );
-                });
-
-        slashMenuSelectionIndex =
-            Math.min(
-                slashMenuSelectionIndex,
-                Math.max(
-                    filteredSlashCommands.length - 1,
-                    0
-                )
-            );
-
-        const fragment =
-            document.createDocumentFragment();
-
-        filteredSlashCommands.forEach(
-            (command, index) => {
-                const button =
-                    document.createElement("button");
-
-                button.type = "button";
-                button.className =
-                    "slash-menu__item";
-
-                button.dataset.blockType =
-                    command.type;
-
-                button.dataset.active =
-                    index ===
-                    slashMenuSelectionIndex
-                        ? "true"
-                        : "false";
-
-                button.setAttribute(
-                    "role",
-                    "menuitem"
-                );
-
-                const icon =
-                    document.createElement("span");
-
-                icon.className =
-                    "slash-menu__item-icon";
-
-                icon.setAttribute(
-                    "aria-hidden",
-                    "true"
-                );
-
-                icon.textContent =
-                    command.icon;
-
-                const content =
-                    document.createElement("span");
-
-                content.className =
-                    "slash-menu__item-content";
-
-                const name =
-                    document.createElement("strong");
-
-                name.className =
-                    "slash-menu__item-name";
-
-                name.textContent =
-                    command.name;
-
-                const description =
-                    document.createElement("span");
-
-                description.className =
-                    "slash-menu__item-description";
-
-                description.textContent =
-                    command.description;
-
-                content.append(
-                    name,
-                    description
-                );
-
-                button.append(
-                    icon,
-                    content
-                );
-
-                fragment.appendChild(button);
-            }
-        );
-
-        elements.slashMenuList.replaceChildren(
-            fragment
-        );
-
-        elements.slashMenuEmpty.hidden =
-            filteredSlashCommands.length > 0;
-    }
-
-    /**
-     * Handles slash menu search.
-     */
-    function handleSlashMenuSearch() {
-        slashMenuSelectionIndex = 0;
-
-        renderSlashMenu(
-            elements.slashMenuSearch.value
-        );
-    }
-
-    /**
-     * Handles slash menu keyboard navigation.
-     *
-     * @param {KeyboardEvent} event
-     */
-    function handleSlashMenuKeyDown(event) {
-        if (event.key === "ArrowDown") {
-            event.preventDefault();
-            moveSlashMenuSelection(1);
-        }
-
-        if (event.key === "ArrowUp") {
-            event.preventDefault();
-            moveSlashMenuSelection(-1);
-        }
-
-        if (event.key === "Enter") {
-            event.preventDefault();
-            selectActiveSlashCommand();
-        }
-
-        if (event.key === "Escape") {
-            event.preventDefault();
-            closeSlashMenu();
-
-            if (slashMenuBlockId) {
-                focusBlock(slashMenuBlockId);
-            }
-        }
-    }
-
-    /**
-     * Handles slash navigation while focus remains in the editor.
-     *
-     * @param {KeyboardEvent} event
-     */
-    function handleSlashNavigationFromEditor(event) {
-        if (event.key === "ArrowDown") {
-            event.preventDefault();
-            moveSlashMenuSelection(1);
-        }
-
-        if (event.key === "ArrowUp") {
-            event.preventDefault();
-            moveSlashMenuSelection(-1);
-        }
-
-        if (event.key === "Enter") {
-            event.preventDefault();
-            selectActiveSlashCommand();
-        }
-
-        if (event.key === "Escape") {
-            event.preventDefault();
-            closeSlashMenu();
-        }
-    }
-
-    /**
-     * Moves the selected slash command.
-     *
-     * @param {number} direction
-     */
-    function moveSlashMenuSelection(direction) {
-        if (
-            filteredSlashCommands.length === 0
-        ) {
-            return;
-        }
-
-        slashMenuSelectionIndex =
-            (
-                slashMenuSelectionIndex +
-                direction +
-                filteredSlashCommands.length
-            ) %
-            filteredSlashCommands.length;
-
-        updateSlashMenuSelection();
-    }
-
-    /**
-     * Updates slash menu visual selection.
-     */
-    function updateSlashMenuSelection() {
-        const buttons =
-            Array.from(
-                elements.slashMenuList.querySelectorAll(
-                    ".slash-menu__item"
-                )
-            );
-
-        buttons.forEach((button, index) => {
-            button.dataset.active =
-                index ===
-                slashMenuSelectionIndex
-                    ? "true"
-                    : "false";
-        });
-
-        buttons[
-            slashMenuSelectionIndex
-        ]?.scrollIntoView({
-            block: "nearest"
-        });
-    }
-
-    /**
-     * Applies the active slash command.
-     */
-    function selectActiveSlashCommand() {
-        const command =
-            filteredSlashCommands[
-                slashMenuSelectionIndex
-            ];
-
-        if (!command || !slashMenuBlockId) {
-            return;
-        }
-
-        applySlashCommand(
-            slashMenuBlockId,
-            command.type
-        );
-    }
-
-    /**
-     * Handles slash menu mouse selection.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleSlashMenuClick(event) {
-        if (!(event.target instanceof Element)) {
-            return;
-        }
-
-        const button =
-            event.target.closest(
-                "[data-block-type]"
-            );
-
-        if (
-            !(button instanceof HTMLButtonElement) ||
-            !slashMenuBlockId
-        ) {
-            return;
-        }
-
-        applySlashCommand(
-            slashMenuBlockId,
-            button.dataset.blockType
-        );
-    }
-
-    /**
-     * Applies a slash command to a block.
-     *
-     * @param {string} blockId
-     * @param {string} blockType
-     */
-    function applySlashCommand(
-        blockId,
-        blockType
-    ) {
-        const context =
-            findBlockContext(blockId);
-
-        if (!context) {
-            return;
-        }
-
-        context.block.content = "";
-
-        closeSlashMenu();
-
-        changeBlockType(
-            blockId,
             blockType
         );
     }
 
-    // =========================================================================
-    // Menu closing and positioning
-    // =========================================================================
+    /**
+     * Changes the type of a block.
+     *
+     * @param {string} blockId
+     * @param {string} blockType
+     */
+    function changeBlockType(
+        blockId,
+        blockType
+    ) {
+        if (!isSupportedBlockType(blockType)) {
+            return;
+        }
+
+        synchronizeAllBlocksFromDom();
+
+        const location =
+            findBlockLocation(blockId);
+
+        if (!location) {
+            return;
+        }
+
+        location.block.type =
+            blockType;
+
+        if (blockType === "divider") {
+            location.block.content = "";
+            delete location.block.checked;
+        } else if (blockType === "checklist") {
+            location.block.checked =
+                Boolean(
+                    location.block.checked
+                );
+        } else {
+            delete location.block.checked;
+        }
+
+        closeAllMenus();
+
+        renderDocument({
+            blockId,
+            offset:
+                blockType === "divider"
+                    ? undefined
+                    : location.block.content.length
+        });
+
+        notifyChange("change-block-type");
+    }
+
+    /**
+     * Positions a menu near an anchor rectangle.
+     *
+     * @param {HTMLElement} menu
+     * @param {DOMRect} anchorRect
+     */
+    function positionMenu(menu, anchorRect) {
+        const margin = 10;
+        const gap = 6;
+
+        const menuWidth =
+            menu.offsetWidth || 240;
+
+        const menuHeight =
+            menu.offsetHeight || 320;
+
+        let left =
+            anchorRect.right + gap;
+
+        let top =
+            anchorRect.top;
+
+        if (
+            left + menuWidth >
+            window.innerWidth - margin
+        ) {
+            left =
+                anchorRect.left -
+                menuWidth -
+                gap;
+        }
+
+        if (
+            top + menuHeight >
+            window.innerHeight - margin
+        ) {
+            top =
+                window.innerHeight -
+                menuHeight -
+                margin;
+        }
+
+        left = Math.max(margin, left);
+        top = Math.max(margin, top);
+
+        menu.style.left = `${left}px`;
+        menu.style.top = `${top}px`;
+        menu.style.right = "auto";
+        menu.style.bottom = "auto";
+    }
+
+    /**
+     * Closes the main block menu.
+     */
+    function closeBlockMenu() {
+        if (elements.blockMenu) {
+            elements.blockMenu.hidden = true;
+        }
+    }
+
+    /**
+     * Closes the type menu.
+     */
+    function closeBlockTypeMenu() {
+        if (elements.blockTypeMenu) {
+            elements.blockTypeMenu.hidden = true;
+        }
+    }
 
     /**
      * Closes all editor menus.
      */
     function closeAllMenus() {
-        closeBlockTypeMenu();
-        closeBlockMenu();
         closeSlashMenu();
+        closeBlockMenu();
+        closeBlockTypeMenu();
+
+        activeMenuBlockId = null;
+    }
+
+    // =========================================================================
+    // Block actions
+    // =========================================================================
+
+    /**
+     * Adds a new block at the end of the document.
+     *
+     * @param {Object} [options]
+     * @param {string} [options.type]
+     * @param {boolean} [options.focus]
+     * @returns {Object}
+     */
+    function addBlock(options = {}) {
+        requireInitialization();
+
+        synchronizeAllBlocksFromDom();
+
+        const block =
+            createBlock(
+                options.type ||
+                DEFAULT_BLOCK_TYPE
+            );
+
+        currentDocument.blocks.push(block);
+
+        renderDocument({
+            blockId:
+                options.focus === false
+                    ? undefined
+                    : block.id,
+            offset: 0
+        });
+
+        notifyChange("add-block");
+
+        return block;
     }
 
     /**
-     * Closes menus when clicking outside them.
+     * Duplicates a block and its descendants.
      *
-     * @param {PointerEvent} event
+     * @param {string} blockId
      */
-    function handleDocumentPointerDown(event) {
-        if (!(event.target instanceof Node)) {
+    function duplicateBlock(blockId) {
+        synchronizeAllBlocksFromDom();
+
+        const location =
+            findBlockLocation(blockId);
+
+        if (!location) {
             return;
         }
 
-        const insideBlockMenu =
-            elements.blockMenu.contains(
-                event.target
+        const duplicate =
+            cloneBlockWithNewIds(
+                location.block
             );
 
-        const insideBlockTypeMenu =
-            elements.blockTypeMenu.contains(
-                event.target
-            );
+        location.collection.splice(
+            location.index + 1,
+            0,
+            duplicate
+        );
 
-        const insideSlashMenu =
-            elements.slashMenu.contains(
-                event.target
-            );
+        renderDocument({
+            blockId: duplicate.id,
+            offset:
+                duplicate.type === "divider"
+                    ? undefined
+                    : duplicate.content.length
+        });
 
-        const insideBlockHandle =
-            event.target instanceof Element &&
-            Boolean(
-                event.target.closest(
-                    ".block__handle"
+        notifyChange("duplicate-block");
+    }
+
+    /**
+     * Clones a block while generating new identifiers.
+     *
+     * @param {Object} block
+     * @returns {Object}
+     */
+    function cloneBlockWithNewIds(block) {
+        const clone = {
+            id: createBlockId(),
+            type: block.type,
+            content: block.content,
+            children:
+                block.children.map(
+                    cloneBlockWithNewIds
                 )
-            );
+        };
+
+        if (clone.type === "checklist") {
+            clone.checked =
+                Boolean(block.checked);
+        }
+
+        return clone;
+    }
+
+    /**
+     * Moves a block among its siblings.
+     *
+     * @param {string} blockId
+     * @param {number} direction
+     */
+    function moveBlock(blockId, direction) {
+        synchronizeAllBlocksFromDom();
+
+        const location =
+            findBlockLocation(blockId);
+
+        if (!location) {
+            return;
+        }
+
+        const destinationIndex =
+            location.index + direction;
 
         if (
-            !insideBlockMenu &&
-            !insideBlockTypeMenu &&
-            !insideBlockHandle
+            destinationIndex < 0 ||
+            destinationIndex >=
+                location.collection.length
         ) {
-            closeBlockTypeMenu();
-            closeBlockMenu();
+            return;
         }
 
-        if (!insideSlashMenu) {
-            const contentElement =
-                getContentElementFromTarget(
-                    event.target
-                );
+        const [block] =
+            location.collection.splice(
+                location.index,
+                1
+            );
 
-            if (
-                !contentElement ||
-                contentElement.dataset.blockId !==
-                    slashMenuBlockId
-            ) {
-                closeSlashMenu();
-            }
-        }
+        location.collection.splice(
+            destinationIndex,
+            0,
+            block
+        );
+
+        renderDocument({
+            blockId,
+            offset:
+                block.type === "divider"
+                    ? undefined
+                    : block.content.length
+        });
+
+        notifyChange("move-block");
     }
 
     /**
-     * Handles global menu keyboard behavior.
+     * Deletes a block.
      *
-     * @param {KeyboardEvent} event
+     * @param {string} blockId
      */
-    function handleDocumentKeyDown(event) {
-        if (event.key !== "Escape") {
-            return;
+    function deleteBlock(blockId) {
+        synchronizeAllBlocksFromDom();
+
+        const previousBlock =
+            getPreviousBlock(blockId);
+
+        const nextBlock =
+            getNextBlock(blockId);
+
+        removeBlockById(blockId);
+
+        if (currentDocument.blocks.length === 0) {
+            const replacement =
+                createBlock();
+
+            currentDocument.blocks.push(
+                replacement
+            );
         }
+
+        const focusTarget =
+            previousBlock ||
+            nextBlock ||
+            currentDocument.blocks[0];
 
         closeAllMenus();
+
+        renderDocument({
+            blockId: focusTarget.id,
+            offset:
+                focusTarget.type === "divider"
+                    ? undefined
+                    : focusTarget.content.length
+        });
+
+        notifyChange("delete-block");
     }
 
     /**
-     * Repositions menus that are currently open.
-     */
-    function repositionOpenMenus() {
-        if (
-            !elements.blockMenu.hidden &&
-            activeMenuBlockId
-        ) {
-            const handle =
-                getBlockElement(
-                    activeMenuBlockId
-                )?.querySelector(
-                    ".block__handle"
-                );
-
-            if (handle) {
-                positionPopover(
-                    elements.blockMenu,
-                    handle.getBoundingClientRect(),
-                    {
-                        horizontal: "left",
-                        vertical: "bottom"
-                    }
-                );
-            }
-        }
-
-        if (
-            !elements.slashMenu.hidden &&
-            slashMenuBlockId
-        ) {
-            const content =
-                getContentElement(
-                    slashMenuBlockId
-                );
-
-            if (content) {
-                positionPopover(
-                    elements.slashMenu,
-                    content.getBoundingClientRect(),
-                    {
-                        horizontal: "left",
-                        vertical: "bottom"
-                    }
-                );
-            }
-        }
-    }
-
-    /**
-     * Positions a popover inside the viewport.
+     * Removes a block by identifier.
      *
-     * @param {HTMLElement} popover
-     * @param {DOMRect} anchorRect
-     * @param {Object} options
-     * @param {string} options.horizontal
-     * @param {string} options.vertical
+     * @param {string} blockId
+     * @returns {boolean}
      */
-    function positionPopover(
-        popover,
-        anchorRect,
-        options
+    function removeBlockById(blockId) {
+        const location =
+            findBlockLocation(blockId);
+
+        if (!location) {
+            return false;
+        }
+
+        location.collection.splice(
+            location.index,
+            1
+        );
+
+        return true;
+    }
+
+    /**
+     * Updates checklist state.
+     *
+     * @param {HTMLElement} blockElement
+     * @param {boolean} checked
+     */
+    function updateChecklistState(
+        blockElement,
+        checked
     ) {
-        const margin = 10;
-        const gap = 6;
+        const blockId =
+            blockElement.dataset.blockId;
 
-        const popoverRect =
-            popover.getBoundingClientRect();
+        const location =
+            findBlockLocation(blockId);
 
-        let left =
-            options.horizontal === "right"
-                ? anchorRect.right + gap
-                : anchorRect.left;
-
-        let top =
-            options.vertical === "top"
-                ? anchorRect.top
-                : anchorRect.bottom + gap;
-
-        if (
-            left + popoverRect.width >
-            window.innerWidth - margin
-        ) {
-            left =
-                window.innerWidth -
-                popoverRect.width -
-                margin;
+        if (!location) {
+            return;
         }
 
-        if (left < margin) {
-            left = margin;
-        }
+        location.block.checked =
+            Boolean(checked);
 
-        if (
-            top + popoverRect.height >
-            window.innerHeight - margin
-        ) {
-            top =
-                anchorRect.top -
-                popoverRect.height -
-                gap;
-        }
+        blockElement.dataset.checked =
+            checked ? "true" : "false";
 
-        if (top < margin) {
-            top = margin;
-        }
-
-        popover.style.left = `${left}px`;
-        popover.style.top = `${top}px`;
-        popover.style.right = "auto";
-        popover.style.bottom = "auto";
+        notifyChange("toggle-checklist");
     }
 
     // =========================================================================
@@ -2535,70 +2438,52 @@
     // =========================================================================
 
     /**
-     * Finds a block and its structural context.
+     * Finds a block and its collection context.
      *
      * @param {string} blockId
      * @returns {Object|null}
      */
-    function findBlockContext(blockId) {
-        return findBlockContextRecursive(
-            currentDocument.blocks,
-            blockId,
-            null
-        );
-    }
-
-    /**
-     * Recursively finds a block context.
-     *
-     * @param {Array<Object>} blocks
-     * @param {string} blockId
-     * @param {Object|null} parentBlock
-     * @returns {Object|null}
-     */
-    function findBlockContextRecursive(
-        blocks,
-        blockId,
-        parentBlock
-    ) {
-        for (
-            let index = 0;
-            index < blocks.length;
-            index += 1
+    function findBlockLocation(blockId) {
+        function search(
+            collection,
+            parentBlock = null
         ) {
-            const block = blocks[index];
-
-            if (block.id === blockId) {
-                return {
-                    block,
-                    index,
-                    parentBlocks: blocks,
-                    parentBlock
-                };
-            }
-
-            if (
-                Array.isArray(block.children) &&
-                block.children.length > 0
+            for (
+                let index = 0;
+                index < collection.length;
+                index += 1
             ) {
-                const childContext =
-                    findBlockContextRecursive(
+                const block =
+                    collection[index];
+
+                if (block.id === blockId) {
+                    return {
+                        block,
+                        collection,
+                        index,
+                        parentBlock
+                    };
+                }
+
+                const childResult =
+                    search(
                         block.children,
-                        blockId,
                         block
                     );
 
-                if (childContext) {
-                    return childContext;
+                if (childResult) {
+                    return childResult;
                 }
             }
+
+            return null;
         }
 
-        return null;
+        return search(currentDocument.blocks);
     }
 
     /**
-     * Returns blocks in visual order.
+     * Returns all blocks in visual order.
      *
      * @returns {Array<Object>}
      */
@@ -2608,13 +2493,7 @@
         function visit(blocks) {
             for (const block of blocks) {
                 result.push(block);
-
-                if (
-                    Array.isArray(block.children) &&
-                    block.children.length > 0
-                ) {
-                    visit(block.children);
-                }
+                visit(block.children);
             }
         }
 
@@ -2624,7 +2503,7 @@
     }
 
     /**
-     * Returns the previous visible block.
+     * Returns the previous block in visual order.
      *
      * @param {string} blockId
      * @returns {Object|null}
@@ -2644,7 +2523,7 @@
     }
 
     /**
-     * Returns the next visible block.
+     * Returns the next block in visual order.
      *
      * @param {string} blockId
      * @returns {Object|null}
@@ -2666,178 +2545,262 @@
             : null;
     }
 
-    /**
-     * Ensures the document always contains one block.
-     */
-    function ensureDocumentHasBlock() {
-        if (
-            currentDocument.blocks.length === 0
-        ) {
-            currentDocument.blocks.push(
-                createBlock()
-            );
-        }
-    }
-
     // =========================================================================
-    // Numbered lists
+    // DOM synchronization
     // =========================================================================
 
     /**
-     * Updates visible numbered-list prefixes.
+     * Synchronizes all rendered blocks into the document model.
      */
-    function updateNumberedListPrefixes() {
-        updateNumberedPrefixesInContainer(
-            elements.blockList
-        );
-    }
-
-    /**
-     * Updates numbered prefixes inside one container.
-     *
-     * @param {HTMLElement} container
-     */
-    function updateNumberedPrefixesInContainer(
-        container
-    ) {
-        let currentNumber = 0;
-
+    function synchronizeAllBlocksFromDom() {
         const blockElements =
-            Array.from(
-                container.children
-            ).filter(element =>
-                element.classList?.contains(
-                    "block"
-                )
+            elements.editorRoot.querySelectorAll(
+                ".editor-block[data-block-id]"
             );
 
         for (const blockElement of blockElements) {
-            const prefix =
+            synchronizeBlockFromDom(
+                blockElement
+            );
+        }
+    }
+
+    /**
+     * Synchronizes one rendered block into the document model.
+     *
+     * @param {HTMLElement} blockElement
+     */
+    function synchronizeBlockFromDom(
+        blockElement
+    ) {
+        const blockId =
+            blockElement.dataset.blockId;
+
+        const location =
+            findBlockLocation(blockId);
+
+        if (!location) {
+            return;
+        }
+
+        if (location.block.type === "divider") {
+            location.block.content = "";
+            return;
+        }
+
+        const contentElement =
+            blockElement.querySelector(
+                ":scope > .editor-block__body > .block-content-row > .block-content"
+            );
+
+        if (
+            contentElement instanceof HTMLElement
+        ) {
+            location.block.content =
+                normalizeEditableText(
+                    contentElement.innerText
+                );
+        }
+
+        if (
+            location.block.type === "checklist"
+        ) {
+            const checkbox =
                 blockElement.querySelector(
-                    ":scope > .block__body > .block__prefix"
+                    ":scope > .editor-block__body > .block-content-row > .checklist-checkbox"
                 );
 
             if (
-                blockElement.dataset.blockType ===
-                "numbered-list"
+                checkbox instanceof
+                HTMLInputElement
             ) {
-                currentNumber += 1;
-
-                if (prefix) {
-                    prefix.textContent =
-                        `${currentNumber}.`;
-                }
-            } else {
-                currentNumber = 0;
-            }
-
-            const children =
-                blockElement.querySelector(
-                    ":scope > .block__children"
-                );
-
-            if (children) {
-                updateNumberedPrefixesInContainer(
-                    children
-                );
+                location.block.checked =
+                    checkbox.checked;
             }
         }
     }
 
+    /**
+     * Normalizes text read from a contenteditable element.
+     *
+     * @param {string} value
+     * @returns {string}
+     */
+    function normalizeEditableText(value) {
+        return String(value || "")
+            .replace(/\r\n?/g, "\n")
+            .replace(/\u00a0/g, " ");
+    }
+
     // =========================================================================
-    // Focus and caret
+    // Selection helpers
     // =========================================================================
 
     /**
-     * Focuses a block.
+     * Returns an editable content element from an event target.
+     *
+     * @param {*} target
+     * @returns {HTMLElement|null}
+     */
+    function getContentElement(target) {
+        if (!(target instanceof Element)) {
+            return null;
+        }
+
+        const content =
+            target.closest(
+                ".block-content[contenteditable='true']"
+            );
+
+        return content instanceof HTMLElement
+            ? content
+            : null;
+    }
+
+    /**
+     * Returns the parent block element.
+     *
+     * @param {*} target
+     * @returns {HTMLElement|null}
+     */
+    function getBlockElement(target) {
+        if (!(target instanceof Element)) {
+            return null;
+        }
+
+        const block =
+            target.closest(".editor-block");
+
+        return block instanceof HTMLElement
+            ? block
+            : null;
+    }
+
+    /**
+     * Returns a rendered block by identifier.
      *
      * @param {string} blockId
-     * @param {"start"|"end"|number} [position]
-     * @returns {boolean}
+     * @returns {HTMLElement|null}
      */
-    function focusBlock(
-        blockId,
-        position = "end"
-    ) {
+    function getBlockElementById(blockId) {
+        const blockElements =
+            elements.editorRoot.querySelectorAll(
+                ".editor-block[data-block-id]"
+            );
+
+        for (const blockElement of blockElements) {
+            if (
+                blockElement.dataset.blockId ===
+                blockId
+            ) {
+                return blockElement;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Focuses a block and positions its caret.
+     *
+     * @param {string} blockId
+     * @param {number} [offset]
+     */
+    function focusBlock(blockId, offset) {
+        const blockElement =
+            getBlockElementById(blockId);
+
+        if (!blockElement) {
+            return;
+        }
+
         const contentElement =
-            getContentElement(blockId);
+            blockElement.querySelector(
+                ":scope > .editor-block__body > .block-content-row > .block-content"
+            );
 
         if (
-            !contentElement ||
-            contentElement.getAttribute(
-                "contenteditable"
-            ) !== "true"
+            !(contentElement instanceof HTMLElement)
         ) {
-            return false;
+            const nextEditable =
+                getNextEditableBlockElement(
+                    blockElement
+                );
+
+            if (nextEditable) {
+                nextEditable.focus();
+                setCaretOffset(nextEditable, 0);
+            }
+
+            return;
         }
 
         contentElement.focus();
 
-        const textLength =
-            getPlainText(contentElement).length;
-
-        let offset = textLength;
-
-        if (position === "start") {
-            offset = 0;
-        } else if (
-            typeof position === "number"
-        ) {
-            offset = Math.max(
-                0,
-                Math.min(position, textLength)
-            );
-        }
+        const resolvedOffset =
+            Number.isFinite(offset)
+                ? offset
+                : getTextLength(
+                    contentElement
+                );
 
         setCaretOffset(
             contentElement,
-            offset
+            resolvedOffset
         );
 
         activeBlockId = blockId;
-
-        return true;
     }
 
     /**
      * Focuses the first editable block.
-     *
-     * @returns {boolean}
      */
     function focusFirstBlock() {
-        const block =
-            getFlattenedBlocks().find(
-                item =>
-                    isEditableBlockType(item.type)
+        requireInitialization();
+
+        const firstContent =
+            elements.editorRoot.querySelector(
+                ".block-content[contenteditable='true']"
             );
 
-        return block
-            ? focusBlock(block.id, "start")
-            : false;
+        if (
+            firstContent instanceof HTMLElement
+        ) {
+            firstContent.focus();
+            setCaretOffset(firstContent, 0);
+        }
     }
 
     /**
-     * Focuses the last editable block.
+     * Returns the next editable element after a block.
      *
-     * @returns {boolean}
+     * @param {HTMLElement} blockElement
+     * @returns {HTMLElement|null}
      */
-    function focusLastBlock() {
-        const blocks =
-            getFlattenedBlocks().filter(
-                item =>
-                    isEditableBlockType(item.type)
-            );
+    function getNextEditableBlockElement(
+        blockElement
+    ) {
+        const editableElements = [
+            ...elements.editorRoot.querySelectorAll(
+                ".block-content[contenteditable='true']"
+            )
+        ];
 
-        const block =
-            blocks[blocks.length - 1];
+        const blockRect =
+            blockElement.getBoundingClientRect();
 
-        return block
-            ? focusBlock(block.id, "end")
-            : false;
+        return (
+            editableElements.find(element => {
+                const rect =
+                    element.getBoundingClientRect();
+
+                return rect.top >= blockRect.bottom;
+            }) || null
+        );
     }
 
     /**
-     * Returns the caret text offset.
+     * Returns the caret offset within an editable element.
      *
      * @param {HTMLElement} element
      * @returns {number}
@@ -2853,37 +2816,48 @@
             return 0;
         }
 
-        const range =
+        const activeRange =
             selection.getRangeAt(0);
 
-        if (!element.contains(range.startContainer)) {
+        if (
+            !element.contains(
+                activeRange.startContainer
+            )
+        ) {
             return 0;
         }
 
-        const precedingRange =
-            range.cloneRange();
-
-        precedingRange.selectNodeContents(element);
-        precedingRange.setEnd(
-            range.startContainer,
-            range.startOffset
-        );
-
-        return precedingRange.toString().length;
-    }
-
-    /**
-     * Sets the caret text offset.
-     *
-     * @param {HTMLElement} element
-     * @param {number} offset
-     */
-    function setCaretOffset(element, offset) {
         const range =
             document.createRange();
 
-        const selection =
-            window.getSelection();
+        range.selectNodeContents(element);
+
+        range.setEnd(
+            activeRange.startContainer,
+            activeRange.startOffset
+        );
+
+        return range.toString().length;
+    }
+
+    /**
+     * Positions the caret at a character offset.
+     *
+     * @param {HTMLElement} element
+     * @param {number} requestedOffset
+     */
+    function setCaretOffset(
+        element,
+        requestedOffset
+    ) {
+        const targetOffset =
+            Math.max(
+                0,
+                Math.min(
+                    requestedOffset,
+                    getTextLength(element)
+                )
+            );
 
         const walker =
             document.createTreeWalker(
@@ -2891,20 +2865,29 @@
                 NodeFilter.SHOW_TEXT
             );
 
-        let remaining = offset;
-        let node = walker.nextNode();
+        let remaining =
+            targetOffset;
 
-        while (node) {
+        let textNode =
+            walker.nextNode();
+
+        while (textNode) {
             const length =
-                node.textContent.length;
+                textNode.textContent.length;
 
             if (remaining <= length) {
+                const range =
+                    document.createRange();
+
                 range.setStart(
-                    node,
+                    textNode,
                     remaining
                 );
 
                 range.collapse(true);
+
+                const selection =
+                    window.getSelection();
 
                 selection.removeAllRanges();
                 selection.addRange(range);
@@ -2913,127 +2896,192 @@
             }
 
             remaining -= length;
-            node = walker.nextNode();
+            textNode = walker.nextNode();
         }
+
+        const range =
+            document.createRange();
 
         range.selectNodeContents(element);
         range.collapse(false);
+
+        const selection =
+            window.getSelection();
 
         selection.removeAllRanges();
         selection.addRange(range);
     }
 
     /**
-     * Checks whether the caret is at the start.
+     * Returns the plain-text length of an element.
      *
      * @param {HTMLElement} element
-     * @returns {boolean}
+     * @returns {number}
      */
-    function isCaretAtStart(element) {
-        return getCaretOffset(element) === 0;
-    }
-
-    /**
-     * Checks whether the caret is at the end.
-     *
-     * @param {HTMLElement} element
-     * @returns {boolean}
-     */
-    function isCaretAtEnd(element) {
+    function getTextLength(element) {
         return (
-            getCaretOffset(element) ===
-            getPlainText(element).length
-        );
-    }
-
-    // =========================================================================
-    // DOM helpers
-    // =========================================================================
-
-    /**
-     * Returns a block element.
-     *
-     * @param {string} blockId
-     * @returns {HTMLElement|null}
-     */
-    function getBlockElement(blockId) {
-        return elements.blockList.querySelector(
-            `.block[data-block-id="${escapeSelector(blockId)}"]`
-        );
+            element.textContent || ""
+        ).length;
     }
 
     /**
-     * Returns a content element.
+     * Returns the current caret rectangle.
      *
-     * @param {string} blockId
-     * @returns {HTMLElement|null}
+     * @returns {DOMRect|null}
      */
-    function getContentElement(blockId) {
-        return elements.blockList.querySelector(
-            `.block__content[data-block-id="${escapeSelector(blockId)}"]`
-        );
-    }
+    function getCaretRect() {
+        const selection =
+            window.getSelection();
 
-    /**
-     * Finds the closest block element.
-     *
-     * @param {*} target
-     * @returns {HTMLElement|null}
-     */
-    function getBlockElementFromTarget(target) {
-        if (!(target instanceof Element)) {
-            return null;
-        }
-
-        return target.closest(".block");
-    }
-
-    /**
-     * Finds the closest content element.
-     *
-     * @param {*} target
-     * @returns {HTMLElement|null}
-     */
-    function getContentElementFromTarget(target) {
-        if (!(target instanceof Element)) {
-            return null;
-        }
-
-        return target.closest(
-            ".block__content"
-        );
-    }
-
-    /**
-     * Returns normalized plain text from a content element.
-     *
-     * @param {HTMLElement} element
-     * @returns {string}
-     */
-    function getPlainText(element) {
-        return element.innerText
-            .replace(/\r\n/g, "\n")
-            .replace(/\u00a0/g, " ");
-    }
-
-    /**
-     * Escapes text for a CSS selector.
-     *
-     * @param {string} value
-     * @returns {string}
-     */
-    function escapeSelector(value) {
         if (
-            window.CSS &&
-            typeof window.CSS.escape === "function"
+            !selection ||
+            selection.rangeCount === 0
         ) {
-            return window.CSS.escape(value);
+            return null;
         }
 
-        return String(value).replace(
-            /["\\]/g,
-            "\\$&"
-        );
+        const range =
+            selection
+                .getRangeAt(0)
+                .cloneRange();
+
+        range.collapse(true);
+
+        const rects =
+            range.getClientRects();
+
+        if (rects.length > 0) {
+            return rects[0];
+        }
+
+        return range.getBoundingClientRect();
+    }
+
+    /**
+     * Inserts plain text at the current selection.
+     *
+     * @param {string} text
+     */
+    function insertPlainTextAtSelection(text) {
+        const selection =
+            window.getSelection();
+
+        if (
+            !selection ||
+            selection.rangeCount === 0
+        ) {
+            return;
+        }
+
+        const range =
+            selection.getRangeAt(0);
+
+        range.deleteContents();
+
+        const textNode =
+            document.createTextNode(text);
+
+        range.insertNode(textNode);
+
+        range.setStartAfter(textNode);
+        range.collapse(true);
+
+        selection.removeAllRanges();
+        selection.addRange(range);
+    }
+
+    // =========================================================================
+    // Global interactions
+    // =========================================================================
+
+    /**
+     * Closes menus after an outside pointer press.
+     *
+     * @param {PointerEvent} event
+     */
+    function handleDocumentPointerDown(event) {
+        if (!(event.target instanceof Node)) {
+            return;
+        }
+
+        const clickedInsideBlockMenu =
+            elements.blockMenu &&
+            elements.blockMenu.contains(
+                event.target
+            );
+
+        const clickedInsideTypeMenu =
+            elements.blockTypeMenu &&
+            elements.blockTypeMenu.contains(
+                event.target
+            );
+
+        const clickedInsideSlashMenu =
+            elements.slashMenu &&
+            elements.slashMenu.contains(
+                event.target
+            );
+
+        const clickedBlockHandle =
+            event.target instanceof Element &&
+            event.target.closest(
+                "[data-action='open-block-menu']"
+            );
+
+        if (
+            !clickedInsideBlockMenu &&
+            !clickedInsideTypeMenu &&
+            !clickedInsideSlashMenu &&
+            !clickedBlockHandle
+        ) {
+            closeBlockMenu();
+            closeBlockTypeMenu();
+            activeMenuBlockId = null;
+        }
+
+        if (
+            !clickedInsideSlashMenu &&
+            !elements.editorRoot.contains(
+                event.target
+            )
+        ) {
+            closeSlashMenu();
+        }
+    }
+
+    /**
+     * Handles document-level escape behavior.
+     *
+     * @param {KeyboardEvent} event
+     */
+    function handleDocumentKeyDown(event) {
+        if (event.key === "Escape") {
+            closeAllMenus();
+        }
+    }
+
+    /**
+     * Repositions or closes menus after resizing.
+     */
+    function handleWindowResize() {
+        closeBlockMenu();
+        closeBlockTypeMenu();
+
+        if (isSlashMenuOpen()) {
+            positionSlashMenu();
+        }
+    }
+
+    /**
+     * Closes floating block menus while scrolling.
+     */
+    function handleWindowScroll() {
+        closeBlockMenu();
+        closeBlockTypeMenu();
+
+        if (isSlashMenuOpen()) {
+            positionSlashMenu();
+        }
     }
 
     // =========================================================================
@@ -3041,34 +3089,20 @@
     // =========================================================================
 
     /**
-     * Registers a document change handler.
-     *
-     * @param {Function|null} handler
-     */
-    function setChangeHandler(handler) {
-        changeHandler =
-            typeof handler === "function"
-                ? handler
-                : null;
-    }
-
-    /**
-     * Notifies the application about a change.
+     * Notifies the application about document changes.
      *
      * @param {string} reason
      */
     function notifyChange(reason) {
         if (
-            !changeHandler ||
-            isRendering
+            isRendering ||
+            !changeHandler
         ) {
             return;
         }
 
         changeHandler(
-            window.NoteUStorage.cloneDocument(
-                currentDocument
-            ),
+            getDocument(),
             {
                 reason,
                 activeBlockId
@@ -3082,30 +3116,33 @@
 
     window.NoteUEditor = Object.freeze({
         initialize,
-        render,
-
         getDocument,
         setDocument,
 
-        createBlock,
         addBlock,
-        insertBlockAfter,
-        removeBlock,
-        duplicateBlock,
-
-        moveBlockUp,
-        moveBlockDown,
-
-        indentBlock,
-        outdentBlock,
-
-        changeBlockType,
-        findBlockContext,
+        focusFirstBlock,
 
         focusBlock,
-        focusFirstBlock,
-        focusLastBlock,
+        changeBlockType,
+        duplicateBlock,
+        deleteBlock,
 
-        setChangeHandler
+        indentBlockById(blockId) {
+            const blockElement =
+                getBlockElementById(blockId);
+
+            if (blockElement) {
+                indentBlock(blockElement);
+            }
+        },
+
+        outdentBlockById(blockId) {
+            const blockElement =
+                getBlockElementById(blockId);
+
+            if (blockElement) {
+                outdentBlock(blockElement);
+            }
+        }
     });
 })();
