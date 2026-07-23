@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-visual">
   <meta name="color-scheme" content="light">
-  <meta name="application-version" content="0.4.2-debugged">
+  <meta name="application-version" content="0.4.3-beta">
   <title>Note</title>
   <link
     id="favicon"
@@ -74,6 +74,16 @@ button {
   display: grid;
   grid-template-columns: var(--icon-column-width) minmax(0, 1fr);
   column-gap: var(--column-gap);
+}
+
+.url-only-note {
+  margin: 54px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: center;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .top-row {
@@ -386,10 +396,11 @@ button {
 }
 
 .block[data-type="numbered-list"] .list-marker {
-  flex-basis: 28px;
-  width: 28px;
-  padding-right: 4px;
-  text-align: right;
+  flex-basis: 20px;
+  width: 20px;
+  padding-right: 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
 }
 
 .check-marker {
@@ -491,17 +502,25 @@ button {
   transform: rotate(90deg);
 }
 
-/* Allinea il triangolo al centro della prima riga, anche con titoli heading. */
-.toggle-row:has(.toggle-title[data-title-style="heading-1"]) .toggle-caret {
-  margin-top: 9px;
+/* Il triangolo resta centrato sulla prima riga qualunque sia lo stile del titolo. */
+.toggle-row {
+  --toggle-caret-offset: 1px;
 }
 
-.toggle-row:has(.toggle-title[data-title-style="heading-2"]) .toggle-caret {
-  margin-top: 3px;
+.toggle-row:has(.toggle-title[data-title-style="heading-1"]) {
+  --toggle-caret-offset: 8px;
 }
 
-.toggle-row:has(.toggle-title[data-title-style="heading-3"]) .toggle-caret {
-  margin-top: 1px;
+.toggle-row:has(.toggle-title[data-title-style="heading-2"]) {
+  --toggle-caret-offset: 4px;
+}
+
+.toggle-row:has(.toggle-title[data-title-style="heading-3"]) {
+  --toggle-caret-offset: 2px;
+}
+
+.toggle-row .toggle-caret {
+  margin-top: var(--toggle-caret-offset);
 }
 
 .toggle-title {
@@ -770,6 +789,8 @@ button {
         ></div>
       </div>
     </section>
+
+    <p class="url-only-note">Your note exists only in this URL</p>
   </main>
 
   <div id="block-menu" class="block-menu" hidden role="menu" aria-label="Block menu"></div>
@@ -1770,6 +1791,83 @@ button {
       selection.addRange(range);
     }
 
+
+    function compareBlocksInDocumentOrder(first, second) {
+      if (first === second) return 0;
+      const position = first.compareDocumentPosition(second);
+      return position & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+    }
+
+    function rangeIntersectsNode(range, node) {
+      try {
+        return range.intersectsNode(node);
+      } catch {
+        return false;
+      }
+    }
+
+    function getBlocksFromRange(range, options = {}) {
+      const { topmost = true } = options;
+      if (!range) return [];
+
+      const blocks = [];
+      root.querySelectorAll('[data-block-content]').forEach((content) => {
+        if (!rangeIntersectsNode(range, content)) return;
+        const block = content.closest('.block');
+        if (block && !blocks.includes(block)) blocks.push(block);
+      });
+
+      root.querySelectorAll('.block[data-type="divider"]').forEach((block) => {
+        if (rangeIntersectsNode(range, block) && !blocks.includes(block)) blocks.push(block);
+      });
+
+      blocks.sort(compareBlocksInDocumentOrder);
+      if (!topmost) return blocks;
+
+      return blocks.filter((block) => (
+        !blocks.some((candidate) => candidate !== block && candidate.contains(block))
+      ));
+    }
+
+    function currentActionRange() {
+      const selection = window.getSelection();
+      if (selectionInsideRoot(selection) && selection.rangeCount) {
+        return selection.getRangeAt(0).cloneRange();
+      }
+      return savedRange?.cloneRange() || null;
+    }
+
+    function getActionBlocks(preferredBlock = null) {
+      const range = currentActionRange();
+      if (!range || range.collapsed) {
+        const fallback = preferredBlock || getCurrentBlock();
+        return fallback ? [fallback] : [];
+      }
+
+      const selected = getBlocksFromRange(range);
+      if (!selected.length) return preferredBlock ? [preferredBlock] : [];
+
+      if (preferredBlock) {
+        const preferredIsSelected = selected.some((block) => (
+          block === preferredBlock || block.contains(preferredBlock) || preferredBlock.contains(block)
+        ));
+        if (!preferredIsSelected) return [preferredBlock];
+      }
+
+      return selected;
+    }
+
+    function runBatchChange(callback) {
+      const previousSuppressChange = suppressChange;
+      suppressChange = true;
+      try {
+        return callback();
+      } finally {
+        suppressChange = previousSuppressChange;
+        if (!previousSuppressChange) emitChange();
+      }
+    }
+
     function handleSelectAll(event) {
       const isSelectAll = (event.ctrlKey || event.metaKey)
         && !event.altKey
@@ -1844,11 +1942,10 @@ button {
       normalizeEmptyContent(content);
 
       const currentType = block.dataset.type;
-      // Quote, liste e checklist continuano con lo stesso tipo. Un blocco vuoto
-      // seguito da Invio ne provoca invece l'uscita, come per il toggle.
-      const nextType = ['heading-1', 'heading-2', 'heading-3'].includes(currentType)
-        ? 'paragraph'
-        : currentType;
+      // Invio continua sempre lo stesso tipo di blocco. Questo vale anche per
+      // gli heading: dividere un titolo a metà produce due righe dello stesso
+      // livello. Un blocco vuoto seguito da Invio ne provoca poi l'uscita.
+      const nextType = currentType;
 
       const nextBlock = createBlock(nextType, {
         indent: block.dataset.indent,
@@ -1892,49 +1989,114 @@ button {
       return true;
     }
 
-    function handleCodeEnter(event, block, content, range) {
-      if (event.ctrlKey || event.metaKey) {
-        event.preventDefault();
-        const paragraph = createBlock('paragraph', {
-          indent: block.dataset.indent
-        });
-        insertAfter(block, paragraph);
-        focusAtStart(getContentElement(paragraph));
-        emitChange();
-        return true;
+    function textOffsetAtRangeStart(content, range) {
+      const before = document.createRange();
+      before.selectNodeContents(content);
+      before.setEnd(range.startContainer, range.startOffset);
+      return before.toString().length;
+    }
+
+    function setCaretAtTextOffset(content, offset) {
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      let remaining = Math.max(0, offset);
+      let lastTextNode = null;
+
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        lastTextNode = node;
+        if (remaining <= node.data.length) {
+          const range = document.createRange();
+          range.setStart(node, remaining);
+          range.collapse(true);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          content.focus();
+          saveSelection();
+          return;
+        }
+        remaining -= node.data.length;
       }
 
+      if (!lastTextNode) {
+        lastTextNode = document.createTextNode('');
+        content.replaceChildren(lastTextNode);
+      }
+
+      const range = document.createRange();
+      range.setStart(lastTextNode, lastTextNode.data.length);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      content.focus();
+      saveSelection();
+    }
+
+    function removeCharacterAtTextOffset(content, offset) {
+      if (offset < 0) return false;
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      let consumed = 0;
+
+      while (walker.nextNode()) {
+        const node = walker.currentNode;
+        const nextConsumed = consumed + node.data.length;
+        if (offset < nextConsumed) {
+          node.deleteData(offset - consumed, 1);
+          return true;
+        }
+        consumed = nextConsumed;
+      }
+
+      return false;
+    }
+
+    function insertNewlineAtRange(content, range) {
+      if (!range.collapsed) range.deleteContents();
+      const newline = document.createTextNode('\n');
+      range.insertNode(newline);
+      range.setStart(newline, 1);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      content.focus();
+      saveSelection();
+    }
+
+    function exitMultilineBlock(block, content, range) {
+      const caretOffset = textOffsetAtRangeStart(content, range);
+      removeCharacterAtTextOffset(content, caretOffset - 1);
+      normalizeEmptyContent(content);
+
+      const paragraph = createBlock('paragraph', {
+        indent: Math.max(0, clampIndent(block.dataset.indent) - 1)
+      });
+      insertAfter(block, paragraph);
+      focusAtStart(getContentElement(paragraph));
+      emitChange();
+      return true;
+    }
+
+    function handleMultilineEnter(event, block, content, range, options = {}) {
+      const { allowExit = true } = options;
       const textBeforeRange = document.createRange();
       textBeforeRange.selectNodeContents(content);
       textBeforeRange.setEnd(range.startContainer, range.startOffset);
       const textBefore = textBeforeRange.toString();
 
-      if (range.collapsed && isCaretAtEnd(content, range) && textBefore.endsWith('\n')) {
+      if (
+        allowExit
+        && range.collapsed
+        && isCaretAtEnd(content, range)
+        && textBefore.endsWith('\n')
+      ) {
         event.preventDefault();
-        content.textContent = textBefore.slice(0, -1);
-        const paragraph = createBlock('paragraph', {
-          indent: block.dataset.indent
-        });
-        insertAfter(block, paragraph);
-        focusAtStart(getContentElement(paragraph));
-        emitChange();
-        return true;
+        return exitMultilineBlock(block, content, range);
       }
 
       event.preventDefault();
-      if (!range.collapsed) range.deleteContents();
-
-      // Inserimento esplicito: execCommand con "\n" non è affidabile nei
-      // <pre> annidati in un contenteditable e in alcuni browser non modifica
-      // affatto il DOM.
-      const newline = document.createTextNode('\n');
-      range.insertNode(newline);
-      range.setStartAfter(newline);
-      range.collapse(true);
-      const selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-      saveSelection();
+      insertNewlineAtRange(content, range);
       emitChange();
       return true;
     }
@@ -1960,6 +2122,14 @@ button {
         return false;
       }
 
+      /*
+       * Shift+Enter è sempre un ritorno a capo morbido nello stesso blocco:
+       * non crea fratelli, non cambia tipo e non esce da toggle/quote/code.
+       */
+      if (event.shiftKey) {
+        return handleMultilineEnter(event, block, content, range, { allowExit: false });
+      }
+
       const inToggleTitle = content.classList.contains('toggle-title');
       if (inToggleTitle) {
         event.preventDefault();
@@ -1975,16 +2145,19 @@ button {
         return true;
       }
 
-      if (block.dataset.type === 'code') {
-        return handleCodeEnter(event, block, content, range);
+      /*
+       * Quote e code sono blocchi multilinea: il primo Invio aggiunge una
+       * riga nello stesso oggetto, il secondo Invio sulla riga vuota ne esce.
+       */
+      if (['quote', 'code'].includes(block.dataset.type)) {
+        return handleMultilineEnter(event, block, content, range);
       }
 
       const empty = isContentEmpty(content);
       if (empty) {
         const indent = clampIndent(block.dataset.indent);
 
-        // An empty nested block exits one indentation level at a time.
-        // Inside a toggle, the following Enter exits the toggle itself.
+        // La riga vuota è il secondo Invio: esce prima dall'indentazione.
         if (indent > 0) {
           event.preventDefault();
           outdentBlock(block);
@@ -1992,12 +2165,21 @@ button {
           return true;
         }
 
+        // Una riga vuota finale nel corpo chiude il toggle.
         if (block.parentElement?.classList.contains('toggle-body') && exitToggleFromBody(block)) {
           event.preventDefault();
           return true;
         }
 
-        if (['bulleted-list', 'numbered-list', 'checklist', 'quote', 'heading-1', 'heading-2', 'heading-3'].includes(block.dataset.type)) {
+        // Liste, to-do e heading vuoti tornano a testo normale.
+        if ([
+          'bulleted-list',
+          'numbered-list',
+          'checklist',
+          'heading-1',
+          'heading-2',
+          'heading-3'
+        ].includes(block.dataset.type)) {
           event.preventDefault();
           replaceBlockWithParagraph(block);
           return true;
@@ -2021,8 +2203,9 @@ button {
       if (!block) return false;
 
       event.preventDefault();
+      const actionBlocks = getActionBlocks(block);
 
-      if (block.dataset.type === 'code') {
+      if (actionBlocks.length === 1 && block.dataset.type === 'code') {
         if (event.shiftKey) {
           const content = getContentElement(block);
           const range = selection.getRangeAt(0);
@@ -2031,8 +2214,9 @@ button {
           beforeRange.setEnd(range.startContainer, range.startOffset);
           const before = beforeRange.toString();
 
-          if (before.endsWith('  ')) {
-            range.setStart(range.startContainer, Math.max(0, range.startOffset - 2));
+          if (before.endsWith('  ') && range.startContainer.nodeType === Node.TEXT_NODE) {
+            const startOffset = Math.max(0, range.startOffset - 2);
+            range.setStart(range.startContainer, startOffset);
             range.deleteContents();
           }
         } else {
@@ -2042,11 +2226,15 @@ button {
         return true;
       }
 
-      if (event.shiftKey) {
-        outdentBlock(block);
-      } else {
-        indentBlock(block);
-      }
+      runBatchChange(() => {
+        actionBlocks.forEach((selectedBlock) => {
+          const currentIndent = clampIndent(selectedBlock.dataset.indent);
+          selectedBlock.dataset.indent = String(
+            clampIndent(currentIndent + (event.shiftKey ? -1 : 1))
+          );
+        });
+        refreshNumberedMarkers();
+      });
 
       return true;
     }
@@ -2339,6 +2527,68 @@ button {
       return replacement;
     }
 
+    function transformBlocks(blocks, targetType, options = {}) {
+      const candidates = [...new Set((blocks || []).filter((block) => block && root.contains(block)))]
+        .sort(compareBlocksInDocumentOrder);
+      if (!candidates.length) return [];
+
+      // Divider is an insertion, not a destructive multi-block conversion.
+      if (targetType === 'divider' && candidates.length > 1) {
+        const divider = createBlock('divider', {
+          indent: candidates[candidates.length - 1].dataset.indent
+        });
+        insertAfter(candidates[candidates.length - 1], divider);
+        emitChange();
+        return [divider];
+      }
+
+      const transformed = [];
+      runBatchChange(() => {
+        candidates.forEach((candidate) => {
+          if (!root.contains(candidate)) return;
+          const result = transformBlock(candidate, targetType, options);
+          if (result) transformed.push(result);
+        });
+      });
+
+      return transformed;
+    }
+
+    function stripContentFormatting(content) {
+      if (!content) return;
+      const plainText = getPlainText(content);
+      if (plainText) content.replaceChildren(document.createTextNode(plainText));
+      else content.replaceChildren(document.createElement('br'));
+      if (content.classList.contains('toggle-title')) {
+        content.dataset.titleStyle = 'paragraph';
+      }
+    }
+
+    function clearFormattingForSelection(preferredBlock = null) {
+      const range = currentActionRange();
+      if (!range || range.collapsed) return false;
+
+      const allIntersectedBlocks = getBlocksFromRange(range, { topmost: false });
+      const topmostBlocks = getBlocksFromRange(range);
+      if (!allIntersectedBlocks.length || !topmostBlocks.length) return false;
+
+      let transformed = [];
+      runBatchChange(() => {
+        // Clear è volutamente netto: qualsiasi blocco toccato dalla selezione
+        // perde link, evidenziazioni e formattazioni inline; poi diventa testo.
+        allIntersectedBlocks.forEach((block) => stripContentFormatting(getContentElement(block)));
+        transformed = transformBlocks(topmostBlocks, 'paragraph');
+      });
+
+      const focusTarget = transformed[0]
+        || topmostBlocks.find((block) => root.contains(block))
+        || preferredBlock;
+      if (focusTarget && root.contains(focusTarget)) {
+        focusAtStart(getContentElement(focusTarget));
+      }
+      return true;
+    }
+
     function setToggleTitleStyle(block, titleStyle) {
       if (!block || block.dataset.type !== 'toggle') return;
       const title = getContentElement(block);
@@ -2361,87 +2611,129 @@ button {
     }
 
     function duplicateBlock(block = null) {
-      const source = block || activeMenuBlock || getCurrentBlock();
-      if (!source) return null;
+      const actionBlocks = getActionBlocks(block || activeMenuBlock || getCurrentBlock());
+      if (!actionBlocks.length) return null;
 
-      const clone = source.cloneNode(true);
-      clone.classList.remove('dragging', 'drag-target-before', 'drag-target-after');
-      clone.draggable = false;
-
-      clone.querySelectorAll('.block').forEach((child) => {
-        child.dataset.blockId = nextBlockId();
-        child.draggable = false;
+      const groups = new Map();
+      actionBlocks.forEach((source) => {
+        const parent = source.parentElement;
+        if (!groups.has(parent)) groups.set(parent, []);
+        groups.get(parent).push(source);
       });
-      clone.dataset.blockId = nextBlockId();
 
-      insertAfter(source, clone);
-      focusAtEnd(getContentElement(clone));
-      emitChange();
-      return clone;
+      const clones = [];
+      runBatchChange(() => {
+        groups.forEach((sources) => {
+          sources.sort(compareBlocksInDocumentOrder);
+          let insertionPoint = sources[sources.length - 1];
+
+          sources.forEach((source) => {
+            const clone = source.cloneNode(true);
+            clone.classList.remove('dragging', 'drag-target-before', 'drag-target-after');
+            clone.draggable = false;
+            clone.dataset.blockId = nextBlockId();
+            clone.querySelectorAll('.block').forEach((child) => {
+              child.dataset.blockId = nextBlockId();
+              child.draggable = false;
+            });
+            insertionPoint.insertAdjacentElement('afterend', clone);
+            insertionPoint = clone;
+            clones.push(clone);
+          });
+        });
+        refreshNumberedMarkers();
+      });
+
+      const lastClone = clones[clones.length - 1];
+      if (lastClone) focusAtEnd(getContentElement(lastClone));
+      return lastClone || null;
     }
 
     function deleteBlock(block = null) {
-      const target = block || activeMenuBlock || getCurrentBlock();
-      if (!target) return;
+      const actionBlocks = getActionBlocks(block || activeMenuBlock || getCurrentBlock());
+      if (!actionBlocks.length) return;
 
-      const previous = target.previousElementSibling;
-      const next = target.nextElementSibling;
-      const parent = target.parentElement;
-      target.remove();
+      const first = actionBlocks[0];
+      const last = actionBlocks[actionBlocks.length - 1];
+      const previous = first.previousElementSibling;
+      const next = last.nextElementSibling;
+      const parentToggle = first.parentElement?.closest('.block[data-type="toggle"]');
 
-      ensureRootHasBlock();
+      runBatchChange(() => {
+        actionBlocks.forEach((target) => {
+          if (root.contains(target)) target.remove();
+        });
+        ensureRootHasBlock();
+      });
 
-      const focusTarget = previous?.classList.contains('block')
+      const focusTarget = previous?.isConnected && previous.classList.contains('block')
         ? previous
-        : next?.classList.contains('block')
+        : next?.isConnected && next.classList.contains('block')
           ? next
-          : parent?.querySelector('.block') || root.querySelector('.block');
+          : parentToggle?.isConnected
+            ? parentToggle
+            : root.querySelector(':scope > .block');
 
       focusAtEnd(getContentElement(focusTarget));
-      emitChange();
     }
 
     function moveBlock(block, direction) {
-      const target = block || activeMenuBlock || getCurrentBlock();
-      if (!target) return;
+      const actionBlocks = getActionBlocks(block || activeMenuBlock || getCurrentBlock());
+      if (!actionBlocks.length) return;
 
-      if (direction === 'up') {
-        const previous = target.previousElementSibling;
-        if (previous?.classList.contains('block')) {
-          previous.insertAdjacentElement('beforebegin', target);
-        }
-      } else {
-        const next = target.nextElementSibling;
-        if (next?.classList.contains('block')) {
-          next.insertAdjacentElement('afterend', target);
-        }
-      }
+      const groups = new Map();
+      actionBlocks.forEach((target) => {
+        const parent = target.parentElement;
+        if (!groups.has(parent)) groups.set(parent, []);
+        groups.get(parent).push(target);
+      });
 
-      focusAtStart(getContentElement(target));
-      emitChange();
+      runBatchChange(() => {
+        groups.forEach((targets) => {
+          targets.sort(compareBlocksInDocumentOrder);
+          const selectedSet = new Set(targets);
+          const first = targets[0];
+          const last = targets[targets.length - 1];
+
+          if (direction === 'up') {
+            let previous = first.previousElementSibling;
+            while (previous && selectedSet.has(previous)) previous = previous.previousElementSibling;
+            if (previous?.classList.contains('block')) previous.before(...targets);
+          } else {
+            let next = last.nextElementSibling;
+            while (next && selectedSet.has(next)) next = next.nextElementSibling;
+            if (next?.classList.contains('block')) next.after(...targets);
+          }
+        });
+        refreshNumberedMarkers();
+      });
+
+      focusAtStart(getContentElement(actionBlocks[0]));
     }
 
     function executeMenuCommand(command, block = null) {
-      const target = block || activeMenuBlock || getCurrentBlock();
       restoreSelection();
+      const target = block || activeMenuBlock || getCurrentBlock();
+      const actionBlocks = getActionBlocks(target);
 
       if (command.startsWith('transform:')) {
         removeSlashQuery(target);
         const targetType = command.slice('transform:'.length);
-        const transformed = transformBlock(target, targetType);
+        const transformed = transformBlocks(actionBlocks, targetType);
+        const lastTransformed = transformed[transformed.length - 1];
 
-        if (targetType === 'divider') {
-          const paragraph = createBlock('paragraph', { indent: transformed.dataset.indent });
-          insertAfter(transformed, paragraph);
+        if (targetType === 'divider' && transformed.length === 1) {
+          const paragraph = createBlock('paragraph', { indent: lastTransformed.dataset.indent });
+          insertAfter(lastTransformed, paragraph);
           focusAtStart(getContentElement(paragraph));
           emitChange();
-        } else {
-          focusAtStart(getContentElement(transformed));
+        } else if (lastTransformed) {
+          focusAtStart(getContentElement(lastTransformed));
         }
       } else if (command.startsWith('insert:')) {
         removeSlashQuery(target);
         const targetType = command.slice('insert:'.length);
-        const inserted = insertBlock(targetType, target);
+        const inserted = insertBlock(targetType, actionBlocks[actionBlocks.length - 1] || target);
         if (targetType === 'divider') {
           const paragraph = createBlock('paragraph', { indent: inserted.dataset.indent });
           insertAfter(inserted, paragraph);
@@ -2449,8 +2741,15 @@ button {
           emitChange();
         }
       } else if (command.startsWith('toggle-title:')) {
-        setToggleTitleStyle(target, command.slice('toggle-title:'.length));
-        focusAtStart(getContentElement(target));
+        actionBlocks
+          .filter((selectedBlock) => selectedBlock.dataset.type === 'toggle')
+          .forEach((selectedBlock) => {
+            setToggleTitleStyle(selectedBlock, command.slice('toggle-title:'.length));
+          });
+        const lastToggle = actionBlocks.filter((selectedBlock) => selectedBlock.dataset.type === 'toggle').at(-1);
+        if (lastToggle) focusAtStart(getContentElement(lastToggle));
+      } else if (command === 'clear-formatting') {
+        clearFormattingForSelection(target);
       } else if (command === 'duplicate') {
         duplicateBlock(target);
       } else if (command === 'delete') {
@@ -3047,6 +3346,7 @@ button {
       deleteBlock,
       moveBlock,
       executeMenuCommand,
+      clearFormattingForSelection,
       readableLinkLabel,
       destroy() {
         abortController.abort();
@@ -3157,6 +3457,8 @@ button {
     }
   ];
 
+  const TRANSFORM_ITEMS = TYPE_ITEMS.filter((item) => item.command !== 'transform:divider');
+
   const INSERT_ITEMS = TYPE_ITEMS.map((item) => ({
     ...item,
     command: item.command.replace('transform:', 'insert:')
@@ -3177,7 +3479,7 @@ button {
       command: 'duplicate',
       icon: '⧉',
       title: 'Duplicate',
-      description: 'Create a copy below',
+      description: 'Copy the selected block or blocks',
       keywords: 'copy clone'
     },
     {
@@ -3201,7 +3503,7 @@ button {
       command: 'delete',
       icon: '⌫',
       title: 'Delete',
-      description: 'Remove this block',
+      description: 'Remove the selected block or blocks',
       keywords: 'remove trash'
     }
   ];
@@ -3268,8 +3570,8 @@ button {
       if (mode === 'context') return CONTEXT_ITEMS;
       if (mode === 'transform') {
         return block?.dataset.type === 'toggle'
-          ? [...TOGGLE_TITLE_ITEMS, ...TYPE_ITEMS]
-          : TYPE_ITEMS;
+          ? [...TOGGLE_TITLE_ITEMS, ...TRANSFORM_ITEMS]
+          : TRANSFORM_ITEMS;
       }
       if (mode === 'slash') return TYPE_ITEMS;
       if (mode === 'insert') return INSERT_ITEMS;
@@ -3536,22 +3838,9 @@ button {
         selection.removeAllRanges();
         selection.addRange(range);
       } else if (command === 'removeFormat') {
-        /*
-         * execCommand('removeFormat') non elimina in modo affidabile link,
-         * evidenziazioni e combinazioni di tag. Sostituiamo la selezione con
-         * lo stesso testo puro, mantenendolo selezionato.
-         */
-        const selection = window.getSelection();
-        if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
-        const range = selection.getRangeAt(0);
-        const plainText = range.toString();
-        const textNode = document.createTextNode(plainText);
-        range.deleteContents();
-        range.insertNode(textNode);
-        const cleanRange = document.createRange();
-        cleanRange.selectNodeContents(textNode);
-        selection.removeAllRanges();
-        selection.addRange(cleanRange);
+        executeEditorCommand('clear-formatting', null);
+        hideInlineToolbar();
+        return;
       } else {
         document.execCommand(command, false);
       }
