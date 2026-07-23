@@ -1,120 +1,85 @@
 /**
  * Note-U
- * Version: 0.2.0
+ * Version: 0.3.0
  *
  * User interface controller.
  *
- * This module is responsible for:
- * - editing document metadata;
- * - selecting the document icon;
- * - updating browser metadata;
- * - handling top bar actions;
- * - displaying save states;
- * - displaying toast notifications;
- * - managing responsive interface behavior.
+ * Responsibilities:
+ * - manage the note title and icon;
+ * - update the browser tab title and favicon;
+ * - manage the top toolbar;
+ * - manage the icon picker and more-actions menu;
+ * - copy the current note link;
+ * - display URL size information;
+ * - display toast notifications and errors;
+ * - resize the title field automatically;
+ * - expose UI events to app.js.
  */
 
 (function () {
     "use strict";
 
+    const Storage = window.NoteUStorage;
+
+    if (!Storage) {
+        throw new Error(
+            "NoteUStorage must be loaded before ui.js."
+        );
+    }
+
     // =========================================================================
     // Constants
     // =========================================================================
 
-    const DEFAULT_TITLE = "Note";
-    const DEFAULT_ICON = "📝";
+    const DEFAULT_BROWSER_TITLE = "Note";
 
-    const SAVE_STATUS_RESET_DELAY = 1800;
+    const URL_SIZE_WARNING_THRESHOLD = 6000;
+    const URL_SIZE_DANGER_THRESHOLD = 7500;
+
     const TOAST_DURATION = 2600;
-
-    const EMOJI_OPTIONS = Object.freeze([
-        "📝",
-        "📄",
-        "📌",
-        "📚",
-        "📖",
-        "📓",
-        "📒",
-        "📔",
-        "📕",
-        "📗",
-        "📘",
-        "📙",
-        "✏️",
-        "🖊️",
-        "🖋️",
-        "✍️",
-        "💡",
-        "🧠",
-        "🎯",
-        "✅",
-        "🚀",
-        "🔥",
-        "⭐",
-        "✨",
-        "💎",
-        "🌱",
-        "🌿",
-        "🌍",
-        "🌙",
-        "☀️",
-        "⚡",
-        "❤️",
-        "💙",
-        "💚",
-        "💛",
-        "🧡",
-        "💜",
-        "🖤",
-        "🤍",
-        "📅",
-        "⏰",
-        "🔔",
-        "🔖",
-        "📎",
-        "🗂️",
-        "📁",
-        "🧰",
-        "⚙️",
-        "🔧",
-        "🔬",
-        "💻",
-        "🖥️",
-        "📱",
-        "🎨",
-        "🎵",
-        "🎬",
-        "📷",
-        "🧩",
-        "🎓",
-        "🏆",
-        "💼",
-        "🏠",
-        "✈️",
-        "🗺️",
-        "🍀",
-        "🌸",
-        "🌊",
-        "🐝",
-        "🦊",
-        "🐼",
-        "🐙",
-        "🦄"
-    ]);
+    const COPY_CONFIRMATION_DURATION = 1500;
 
     // =========================================================================
-    // Internal state
+    // Interface elements
     // =========================================================================
 
-    let elements = null;
-    let currentDocument = null;
+    let titleElement = null;
 
-    let documentChangeHandler = null;
-    let newNoteHandler = null;
+    let iconButtonElement = null;
+    let iconElement = null;
+    let faviconElement = null;
+
+    let newNoteButtonElement = null;
+    let copyLinkButtonElement = null;
+    let copyLinkButtonLabelElement = null;
+    let addBlockButtonElement = null;
+
+    let moreActionsButtonElement = null;
+    let moreActionsMenuElement = null;
+
+    let iconPickerElement = null;
+    let iconPickerGridElement = null;
+
+    let urlSizeIndicatorElement = null;
+    let toastRegionElement = null;
+
+    let errorDialogElement = null;
+    let errorDialogMessageElement = null;
+
+    // =========================================================================
+    // State
+    // =========================================================================
+
+    let documentModel = null;
+
+    let titleChangeHandler = function () {};
+    let iconChangeHandler = function () {};
+    let newNoteHandler = function () {};
+    let addBlockHandler = function () {};
     let copyLinkHandler = null;
+    let getDocumentUrlHandler = null;
 
-    let saveStatusTimer = null;
-    let activeToastTimer = null;
+    let copyButtonTimer = null;
 
     let isInitialized = false;
 
@@ -126,128 +91,170 @@
      * Initializes the user interface.
      *
      * @param {Object} options
-     * @param {Object} options.documentModel
-     * @param {Function} [options.onDocumentChange]
+     * @param {Object} options.document
+     * @param {Function} [options.onTitleChange]
+     * @param {Function} [options.onIconChange]
      * @param {Function} [options.onNewNote]
+     * @param {Function} [options.onAddBlock]
      * @param {Function} [options.onCopyLink]
+     * @param {Function} [options.getDocumentUrl]
+     * @returns {Object}
      */
     function initialize(options) {
-        if (!options || typeof options !== "object") {
-            throw new TypeError(
-                "Note-U UI initialization options are required."
-            );
-        }
-
         cacheElements();
-        validateElements();
 
-        documentChangeHandler =
-            typeof options.onDocumentChange === "function"
-                ? options.onDocumentChange
-                : null;
+        documentModel =
+            Storage.normalizeDocument(
+                options.document
+            );
+
+        titleChangeHandler =
+            typeof options.onTitleChange === "function"
+                ? options.onTitleChange
+                : function () {};
+
+        iconChangeHandler =
+            typeof options.onIconChange === "function"
+                ? options.onIconChange
+                : function () {};
 
         newNoteHandler =
             typeof options.onNewNote === "function"
                 ? options.onNewNote
-                : null;
+                : function () {};
+
+        addBlockHandler =
+            typeof options.onAddBlock === "function"
+                ? options.onAddBlock
+                : function () {};
 
         copyLinkHandler =
             typeof options.onCopyLink === "function"
                 ? options.onCopyLink
                 : null;
 
-        currentDocument =
-            window.NoteUStorage.normalizeDocument(
-                options.documentModel
-            );
+        getDocumentUrlHandler =
+            typeof options.getDocumentUrl === "function"
+                ? options.getDocumentUrl
+                : null;
 
-        renderEmojiGrid();
-        bindEvents();
-        setDocument(currentDocument);
+        if (!isInitialized) {
+            bindEvents();
+            isInitialized = true;
+        }
 
-        updateTopbarScrollState();
+        renderDocumentHeader();
 
-        isInitialized = true;
+        return publicApi;
     }
 
     /**
-     * Caches required DOM elements.
+     * Finds and validates the required interface elements.
      */
     function cacheElements() {
-        elements = {
-            app: document.getElementById("app"),
-            topbar: document.getElementById("topbar"),
-
-            titleInput:
-                document.getElementById("document-title"),
-
-            iconButton:
-                document.getElementById(
-                    "document-icon-button"
-                ),
-
-            iconDisplay:
-                document.getElementById("document-icon"),
-
-            emojiPopover:
-                document.getElementById("emoji-popover"),
-
-            emojiGrid:
-                document.getElementById("emoji-grid"),
-
-            closeEmojiButton:
-                document.getElementById(
-                    "close-emoji-popover-button"
-                ),
-
-            favicon:
-                document.getElementById("app-favicon"),
-
-            saveStatus:
-                document.getElementById("save-status"),
-
-            copyLinkButton:
-                document.getElementById(
-                    "copy-link-button"
-                ),
-
-            newNoteButton:
-                document.getElementById(
-                    "new-note-button"
-                ),
-
-            addBlockButton:
-                document.getElementById(
-                    "add-block-button"
-                ),
-
-            toastRegion:
-                document.getElementById("toast-region")
-        };
-    }
-
-    /**
-     * Validates required DOM elements.
-     */
-    function validateElements() {
-        const missingElements = Object.entries(elements)
-            .filter(([, value]) => !value)
-            .map(([name]) => name);
-
-        if (missingElements.length > 0) {
-            throw new Error(
-                `Note-U UI is missing required elements: ${missingElements.join(", ")}`
+        titleElement =
+            document.getElementById(
+                "note-title"
             );
-        }
-    }
 
-    /**
-     * Ensures that the UI has been initialized.
-     */
-    function requireInitialization() {
-        if (!isInitialized || !elements) {
+        iconButtonElement =
+            document.getElementById(
+                "note-icon-button"
+            );
+
+        iconElement =
+            document.getElementById(
+                "note-icon"
+            );
+
+        faviconElement =
+            document.getElementById(
+                "favicon"
+            );
+
+        newNoteButtonElement =
+            document.getElementById(
+                "new-note-button"
+            );
+
+        copyLinkButtonElement =
+            document.getElementById(
+                "copy-link-button"
+            );
+
+        copyLinkButtonLabelElement =
+            document.getElementById(
+                "copy-link-button-label"
+            );
+
+        addBlockButtonElement =
+            document.getElementById(
+                "add-block-button"
+            );
+
+        moreActionsButtonElement =
+            document.getElementById(
+                "more-actions-button"
+            );
+
+        moreActionsMenuElement =
+            document.getElementById(
+                "more-actions-menu"
+            );
+
+        iconPickerElement =
+            document.getElementById(
+                "icon-picker"
+            );
+
+        iconPickerGridElement =
+            document.getElementById(
+                "icon-picker-grid"
+            );
+
+        urlSizeIndicatorElement =
+            document.getElementById(
+                "url-size-indicator"
+            );
+
+        toastRegionElement =
+            document.getElementById(
+                "toast-region"
+            );
+
+        errorDialogElement =
+            document.getElementById(
+                "error-dialog"
+            );
+
+        errorDialogMessageElement =
+            document.getElementById(
+                "error-dialog-message"
+            );
+
+        const requiredElements = [
+            titleElement,
+            iconButtonElement,
+            iconElement,
+            faviconElement,
+            newNoteButtonElement,
+            copyLinkButtonElement,
+            addBlockButtonElement,
+            moreActionsButtonElement,
+            moreActionsMenuElement,
+            iconPickerElement,
+            iconPickerGridElement,
+            urlSizeIndicatorElement,
+            toastRegionElement
+        ];
+
+        if (
+            requiredElements.some(
+                element => !element
+            )
+        ) {
             throw new Error(
-                "Note-U UI has not been initialized."
+                "The user interface is incomplete."
             );
         }
     }
@@ -257,47 +264,60 @@
     // =========================================================================
 
     /**
-     * Registers UI event listeners.
+     * Binds all interface events.
      */
     function bindEvents() {
-        elements.titleInput.addEventListener(
+        titleElement.addEventListener(
             "input",
             handleTitleInput
         );
 
-        elements.titleInput.addEventListener(
+        titleElement.addEventListener(
             "keydown",
             handleTitleKeyDown
         );
 
-        elements.iconButton.addEventListener(
-            "click",
-            toggleEmojiPopover
+        titleElement.addEventListener(
+            "paste",
+            handleTitlePaste
         );
 
-        elements.closeEmojiButton.addEventListener(
+        iconButtonElement.addEventListener(
             "click",
-            closeEmojiPopover
+            toggleIconPicker
         );
 
-        elements.emojiGrid.addEventListener(
+        iconPickerGridElement.addEventListener(
             "click",
-            handleEmojiSelection
+            handleIconPickerClick
         );
 
-        elements.copyLinkButton.addEventListener(
+        newNoteButtonElement.addEventListener(
             "click",
-            handleCopyLink
+            requestNewNote
         );
 
-        elements.newNoteButton.addEventListener(
+        copyLinkButtonElement.addEventListener(
             "click",
-            handleNewNote
+            copyCurrentLink
         );
 
-        elements.addBlockButton.addEventListener(
+        addBlockButtonElement.addEventListener(
             "click",
-            handleAddBlock
+            () => {
+                closeMenus();
+                addBlockHandler();
+            }
+        );
+
+        moreActionsButtonElement.addEventListener(
+            "click",
+            toggleMoreActionsMenu
+        );
+
+        moreActionsMenuElement.addEventListener(
+            "click",
+            handleMoreActionsClick
         );
 
         document.addEventListener(
@@ -307,78 +327,78 @@
 
         document.addEventListener(
             "keydown",
-            handleGlobalKeyDown
-        );
-
-        window.addEventListener(
-            "scroll",
-            updateTopbarScrollState,
-            {
-                passive: true
-            }
+            handleDocumentKeyDown
         );
 
         window.addEventListener(
             "resize",
-            handleWindowResize
+            closeMenus
+        );
+
+        window.addEventListener(
+            "scroll",
+            closeMenus,
+            true
         );
     }
 
     // =========================================================================
-    // Document state
+    // Document header
     // =========================================================================
 
     /**
-     * Replaces the current UI document state.
+     * Renders the note title, icon, browser title and favicon.
+     */
+    function renderDocumentHeader() {
+        titleElement.value =
+            documentModel.title;
+
+        iconElement.textContent =
+            documentModel.icon;
+
+        resizeTitle();
+
+        updateBrowserTitle(
+            documentModel.title
+        );
+
+        updateFavicon(
+            documentModel.icon
+        );
+    }
+
+    /**
+     * Updates the UI with a new document.
      *
      * @param {*} nextDocument
      */
     function setDocument(nextDocument) {
-        if (!elements) {
-            return;
-        }
-
-        currentDocument =
-            window.NoteUStorage.normalizeDocument(
+        documentModel =
+            Storage.normalizeDocument(
                 nextDocument
             );
 
-        elements.titleInput.value =
-            currentDocument.title;
-
-        elements.iconDisplay.textContent =
-            currentDocument.icon;
-
-        resizeTitleInput();
-        updateBrowserMetadata();
+        renderDocumentHeader();
+        closeMenus();
     }
 
     /**
-     * Returns a clone of the current UI document state.
+     * Returns the current UI title and icon.
      *
-     * @returns {Object}
+     * @returns {{title:string, icon:string}}
      */
-    function getDocument() {
-        requireInitialization();
+    function getHeaderData() {
+        return {
+            title:
+                normalizeTitle(
+                    titleElement.value
+                ),
 
-        return window.NoteUStorage.cloneDocument(
-            currentDocument
-        );
-    }
-
-    /**
-     * Updates document metadata.
-     *
-     * @param {Object} partialDocument
-     */
-    function updateDocument(partialDocument) {
-        currentDocument =
-            window.NoteUStorage.normalizeDocument({
-                ...currentDocument,
-                ...partialDocument
-            });
-
-        updateBrowserMetadata();
+            icon:
+                normalizeIcon(
+                    iconElement.textContent
+                )
+        };
     }
 
     // =========================================================================
@@ -386,282 +406,973 @@
     // =========================================================================
 
     /**
-     * Handles title input changes.
+     * Handles title changes.
      */
     function handleTitleInput() {
-        resizeTitleInput();
+        resizeTitle();
 
-        updateDocument({
-            title: elements.titleInput.value
-        });
+        const title =
+            normalizeTitle(
+                titleElement.value
+            );
 
-        notifyDocumentChange("edit-title");
+        documentModel.title = title;
+
+        updateBrowserTitle(title);
+
+        titleChangeHandler(title);
     }
 
     /**
-     * Handles keyboard behavior in the title field.
+     * Handles title keyboard commands.
      *
      * @param {KeyboardEvent} event
      */
     function handleTitleKeyDown(event) {
-        if (event.key !== "Enter") {
+        if (
+            event.key === "Enter" &&
+            !event.shiftKey
+        ) {
+            event.preventDefault();
+
+            focusFirstEditorBlock();
+            return;
+        }
+
+        if (
+            event.key === "ArrowDown" &&
+            isCaretAtEnd(titleElement)
+        ) {
+            event.preventDefault();
+
+            focusFirstEditorBlock();
+        }
+    }
+
+    /**
+     * Converts pasted title content to plain single-line text.
+     *
+     * @param {ClipboardEvent} event
+     */
+    function handleTitlePaste(event) {
+        const text =
+            event.clipboardData?.getData(
+                "text/plain"
+            );
+
+        if (typeof text !== "string") {
             return;
         }
 
         event.preventDefault();
 
-        if (
-            window.NoteUEditor &&
-            typeof window.NoteUEditor.focusFirstBlock === "function"
-        ) {
-            window.NoteUEditor.focusFirstBlock();
-        }
-    }
+        const normalizedText =
+            text
+                .replace(/\r\n?/g, "\n")
+                .replace(/\n+/g, " ");
 
-    /**
-     * Automatically resizes the title textarea.
-     */
-    function resizeTitleInput() {
-        elements.titleInput.style.height = "auto";
-
-        const nextHeight = Math.min(
-            elements.titleInput.scrollHeight,
-            240
+        insertTextIntoTextarea(
+            titleElement,
+            normalizedText
         );
 
-        elements.titleInput.style.height =
-            `${Math.max(nextHeight, 58)}px`;
+        titleElement.dispatchEvent(
+            new Event(
+                "input",
+                {
+                    bubbles: true
+                }
+            )
+        );
+    }
+
+    /**
+     * Resizes the title textarea to fit its content.
+     */
+    function resizeTitle() {
+        titleElement.style.height =
+            "auto";
+
+        titleElement.style.height =
+            `${Math.max(
+                52,
+                titleElement.scrollHeight
+            )}px`;
+    }
+
+    /**
+     * Normalizes a title.
+     *
+     * Empty titles remain empty in the editor, but the browser tab receives
+     * a safe fallback.
+     *
+     * @param {*} value
+     * @returns {string}
+     */
+    function normalizeTitle(value) {
+        return String(
+            value ?? ""
+        )
+            .replace(/\r\n?/g, "\n")
+            .replace(/\n+/g, " ")
+            .trimStart();
+    }
+
+    /**
+     * Updates the browser tab title.
+     *
+     * The icon and application name are deliberately excluded.
+     *
+     * @param {*} title
+     */
+    function updateBrowserTitle(title) {
+        const normalizedTitle =
+            String(title || "").trim();
+
+        document.title =
+            normalizedTitle ||
+            DEFAULT_BROWSER_TITLE;
     }
 
     // =========================================================================
-    // Emoji picker
+    // Icon and favicon
     // =========================================================================
 
     /**
-     * Renders available emoji buttons.
+     * Opens or closes the icon picker.
+     *
+     * @param {MouseEvent} event
      */
-    function renderEmojiGrid() {
-        const fragment =
-            document.createDocumentFragment();
+    function toggleIconPicker(event) {
+        event.preventDefault();
+        event.stopPropagation();
 
-        for (const emoji of EMOJI_OPTIONS) {
-            const button =
-                document.createElement("button");
+        const shouldOpen =
+            iconPickerElement.hidden;
 
-            button.type = "button";
-            button.className = "emoji-button";
-            button.dataset.emoji = emoji;
-            button.setAttribute("role", "listitem");
-            button.setAttribute(
-                "aria-label",
-                `Use ${emoji} as the note icon`
+        closeMenus();
+
+        if (shouldOpen) {
+            iconPickerElement.hidden =
+                false;
+
+            iconButtonElement.setAttribute(
+                "aria-expanded",
+                "true"
             );
 
-            button.textContent = emoji;
-
-            fragment.appendChild(button);
+            positionPopoverNearElement(
+                iconPickerElement,
+                iconButtonElement,
+                {
+                    horizontal: "left",
+                    vertical: "bottom"
+                }
+            );
         }
-
-        elements.emojiGrid.replaceChildren(fragment);
     }
 
     /**
-     * Opens or closes the emoji popover.
+     * Handles an icon selection.
+     *
+     * @param {MouseEvent} event
      */
-    function toggleEmojiPopover() {
-        if (elements.emojiPopover.hidden) {
-            openEmojiPopover();
+    function handleIconPickerClick(event) {
+        const button =
+            event.target.closest(
+                "[data-icon]"
+            );
+
+        if (!button) {
             return;
         }
 
-        closeEmojiPopover();
-    }
-
-    /**
-     * Opens the emoji popover.
-     */
-    function openEmojiPopover() {
-        elements.emojiPopover.hidden = false;
-
-        positionEmojiPopover();
-
-        elements.iconButton.setAttribute(
-            "aria-expanded",
-            "true"
+        setIcon(
+            button.dataset.icon
         );
 
-        requestAnimationFrame(() => {
-            const selectedButton =
-                elements.emojiGrid.querySelector(
-                    `[data-emoji="${escapeSelector(currentDocument.icon)}"]`
-                );
-
-            const firstButton =
-                elements.emojiGrid.querySelector(
-                    ".emoji-button"
-                );
-
-            const focusTarget =
-                selectedButton || firstButton;
-
-            if (focusTarget instanceof HTMLElement) {
-                focusTarget.focus();
-            }
-        });
+        closeMenus();
     }
 
     /**
-     * Closes the emoji popover.
+     * Sets the note icon.
+     *
+     * @param {*} icon
      */
-    function closeEmojiPopover() {
-        elements.emojiPopover.hidden = true;
+    function setIcon(icon) {
+        const normalizedIcon =
+            normalizeIcon(icon);
 
-        elements.iconButton.setAttribute(
+        documentModel.icon =
+            normalizedIcon;
+
+        iconElement.textContent =
+            normalizedIcon;
+
+        updateFavicon(
+            normalizedIcon
+        );
+
+        iconChangeHandler(
+            normalizedIcon
+        );
+    }
+
+    /**
+     * Resets the note icon.
+     */
+    function resetIcon() {
+        setIcon(
+            Storage.DEFAULT_ICON
+        );
+
+        showToast(
+            "Icon reset."
+        );
+    }
+
+    /**
+     * Normalizes an icon value.
+     *
+     * @param {*} value
+     * @returns {string}
+     */
+    function normalizeIcon(value) {
+        const icon =
+            String(value || "").trim();
+
+        return icon ||
+            Storage.DEFAULT_ICON;
+    }
+
+    /**
+     * Updates the browser favicon using the note icon.
+     *
+     * @param {*} icon
+     */
+    function updateFavicon(icon) {
+        const normalizedIcon =
+            normalizeIcon(icon);
+
+        const svg = [
+            "<svg",
+            " xmlns='http://www.w3.org/2000/svg'",
+            " viewBox='0 0 100 100'",
+            ">",
+            "<text",
+            " x='50'",
+            " y='50'",
+            " text-anchor='middle'",
+            " dominant-baseline='central'",
+            " font-size='82'",
+            ">",
+            escapeXml(normalizedIcon),
+            "</text>",
+            "</svg>"
+        ].join("");
+
+        faviconElement.href =
+            `data:image/svg+xml,${encodeURIComponent(
+                svg
+            )}`;
+    }
+
+    // =========================================================================
+    // Toolbar actions
+    // =========================================================================
+
+    /**
+     * Requests creation of a new note.
+     */
+    function requestNewNote() {
+        closeMenus();
+        newNoteHandler();
+    }
+
+    /**
+     * Copies the current note link.
+     */
+    async function copyCurrentLink() {
+        closeMenus();
+
+        try {
+            let url;
+
+            if (copyLinkHandler) {
+                url =
+                    await copyLinkHandler();
+            } else if (
+                getDocumentUrlHandler
+            ) {
+                url =
+                    await getDocumentUrlHandler();
+
+                await writeTextToClipboard(
+                    url
+                );
+            } else {
+                url =
+                    window.location.href;
+
+                await writeTextToClipboard(
+                    url
+                );
+            }
+
+            showCopyConfirmation();
+
+            showToast(
+                "Note link copied."
+            );
+
+            return url;
+        } catch (error) {
+            showError(
+                "The note link could not be copied."
+            );
+
+            return null;
+        }
+    }
+
+    /**
+     * Shows temporary confirmation text on the copy button.
+     */
+    function showCopyConfirmation() {
+        window.clearTimeout(
+            copyButtonTimer
+        );
+
+        if (copyLinkButtonLabelElement) {
+            copyLinkButtonLabelElement.textContent =
+                "Copied";
+        }
+
+        copyLinkButtonElement.classList.add(
+            "is-copied"
+        );
+
+        copyButtonTimer =
+            window.setTimeout(() => {
+                if (
+                    copyLinkButtonLabelElement
+                ) {
+                    copyLinkButtonLabelElement.textContent =
+                        "Copy link";
+                }
+
+                copyLinkButtonElement.classList.remove(
+                    "is-copied"
+                );
+            }, COPY_CONFIRMATION_DURATION);
+    }
+
+    /**
+     * Opens or closes the more-actions menu.
+     *
+     * @param {MouseEvent} event
+     */
+    function toggleMoreActionsMenu(event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        const shouldOpen =
+            moreActionsMenuElement.hidden;
+
+        closeMenus();
+
+        if (shouldOpen) {
+            moreActionsMenuElement.hidden =
+                false;
+
+            moreActionsButtonElement.setAttribute(
+                "aria-expanded",
+                "true"
+            );
+
+            positionPopoverNearElement(
+                moreActionsMenuElement,
+                moreActionsButtonElement,
+                {
+                    horizontal: "right",
+                    vertical: "bottom"
+                }
+            );
+        }
+    }
+
+    /**
+     * Handles commands inside the more-actions menu.
+     *
+     * @param {MouseEvent} event
+     */
+    function handleMoreActionsClick(event) {
+        const button =
+            event.target.closest(
+                "[data-note-action]"
+            );
+
+        if (!button) {
+            return;
+        }
+
+        const action =
+            button.dataset.noteAction;
+
+        closeMenus();
+
+        switch (action) {
+            case "copy-link":
+                copyCurrentLink();
+                break;
+
+            case "new-note":
+                requestNewNote();
+                break;
+
+            case "reset-icon":
+                resetIcon();
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    // =========================================================================
+    // URL size indicator
+    // =========================================================================
+
+    /**
+     * Updates the link-size indicator.
+     *
+     * @param {string|number} value
+     */
+    function updateUrlSize(value) {
+        let size;
+
+        if (typeof value === "number") {
+            size = value;
+        } else {
+            size =
+                String(value || "").length;
+        }
+
+        urlSizeIndicatorElement.classList.remove(
+            "is-warning",
+            "is-danger"
+        );
+
+        if (!size) {
+            urlSizeIndicatorElement.textContent =
+                "";
+
+            return;
+        }
+
+        const formattedSize =
+            new Intl.NumberFormat(
+                "en-US"
+            ).format(size);
+
+        if (
+            size >=
+            URL_SIZE_DANGER_THRESHOLD
+        ) {
+            urlSizeIndicatorElement.textContent =
+                `${formattedSize} URL characters — the link may be too long for some browsers or services.`;
+
+            urlSizeIndicatorElement.classList.add(
+                "is-danger"
+            );
+
+            return;
+        }
+
+        if (
+            size >=
+            URL_SIZE_WARNING_THRESHOLD
+        ) {
+            urlSizeIndicatorElement.textContent =
+                `${formattedSize} URL characters — the note is becoming large.`;
+
+            urlSizeIndicatorElement.classList.add(
+                "is-warning"
+            );
+
+            return;
+        }
+
+        urlSizeIndicatorElement.textContent =
+            `${formattedSize} URL characters`;
+    }
+
+    /**
+     * Clears the URL-size indicator.
+     */
+    function clearUrlSize() {
+        updateUrlSize(0);
+    }
+
+    // =========================================================================
+    // Toast notifications
+    // =========================================================================
+
+    /**
+     * Displays a temporary toast notification.
+     *
+     * @param {string} message
+     * @param {Object} [options]
+     * @param {string} [options.type]
+     * @param {number} [options.duration]
+     * @returns {HTMLElement|null}
+     */
+    function showToast(
+        message,
+        options = {}
+    ) {
+        if (
+            !toastRegionElement ||
+            !message
+        ) {
+            return null;
+        }
+
+        const toast =
+            document.createElement("div");
+
+        toast.className = "toast";
+        toast.setAttribute(
+            "role",
+            options.type === "error"
+                ? "alert"
+                : "status"
+        );
+
+        if (options.type === "error") {
+            toast.classList.add(
+                "toast--error"
+            );
+        }
+
+        toast.textContent =
+            String(message);
+
+        toastRegionElement.appendChild(
+            toast
+        );
+
+        const duration =
+            Number.isFinite(
+                options.duration
+            )
+                ? options.duration
+                : TOAST_DURATION;
+
+        window.setTimeout(() => {
+            removeToast(toast);
+        }, duration);
+
+        return toast;
+    }
+
+    /**
+     * Removes a toast with a small visual transition.
+     *
+     * @param {HTMLElement} toast
+     */
+    function removeToast(toast) {
+        if (
+            !toast ||
+            !toast.isConnected
+        ) {
+            return;
+        }
+
+        toast.style.opacity = "0";
+        toast.style.transform =
+            "translateY(5px)";
+
+        window.setTimeout(() => {
+            toast.remove();
+        }, 140);
+    }
+
+    // =========================================================================
+    // Errors
+    // =========================================================================
+
+    /**
+     * Displays an error to the user.
+     *
+     * @param {*} message
+     */
+    function showError(message) {
+        const text =
+            message instanceof Error
+                ? message.message
+                : String(
+                    message ||
+                    "Something went wrong."
+                );
+
+        if (
+            errorDialogElement &&
+            errorDialogMessageElement &&
+            typeof errorDialogElement
+                .showModal === "function"
+        ) {
+            errorDialogMessageElement.textContent =
+                text;
+
+            if (!errorDialogElement.open) {
+                errorDialogElement.showModal();
+            }
+
+            return;
+        }
+
+        showToast(
+            text,
+            {
+                type: "error",
+                duration: 4200
+            }
+        );
+    }
+
+    /**
+     * Closes the error dialog.
+     */
+    function closeError() {
+        if (
+            errorDialogElement?.open
+        ) {
+            errorDialogElement.close();
+        }
+    }
+
+    // =========================================================================
+    // Menus
+    // =========================================================================
+
+    /**
+     * Handles pointer presses outside UI menus.
+     *
+     * @param {PointerEvent} event
+     */
+    function handleDocumentPointerDown(
+        event
+    ) {
+        const insideUiMenu =
+            event.target.closest(
+                "#icon-picker, #more-actions-menu"
+            );
+
+        const onUiTrigger =
+            event.target.closest(
+                "#note-icon-button, #more-actions-button"
+            );
+
+        if (
+            !insideUiMenu &&
+            !onUiTrigger
+        ) {
+            closeMenus();
+        }
+    }
+
+    /**
+     * Handles global interface keyboard shortcuts.
+     *
+     * @param {KeyboardEvent} event
+     */
+    function handleDocumentKeyDown(event) {
+        if (event.key === "Escape") {
+            closeMenus();
+            closeError();
+
+            return;
+        }
+
+        const modifier =
+            event.ctrlKey ||
+            event.metaKey;
+
+        if (
+            modifier &&
+            event.shiftKey &&
+            event.key.toLowerCase() === "c"
+        ) {
+            event.preventDefault();
+            copyCurrentLink();
+
+            return;
+        }
+
+        if (
+            modifier &&
+            event.altKey &&
+            event.key.toLowerCase() === "n"
+        ) {
+            event.preventDefault();
+            requestNewNote();
+        }
+    }
+
+    /**
+     * Closes interface popovers.
+     */
+    function closeMenus() {
+        if (iconPickerElement) {
+            iconPickerElement.hidden =
+                true;
+        }
+
+        if (moreActionsMenuElement) {
+            moreActionsMenuElement.hidden =
+                true;
+        }
+
+        iconButtonElement?.setAttribute(
+            "aria-expanded",
+            "false"
+        );
+
+        moreActionsButtonElement?.setAttribute(
             "aria-expanded",
             "false"
         );
     }
 
+    // =========================================================================
+    // Popover positioning
+    // =========================================================================
+
     /**
-     * Positions the emoji popover.
+     * Positions a popover near an element.
+     *
+     * @param {HTMLElement} popover
+     * @param {HTMLElement} anchor
+     * @param {Object} [options]
+     * @param {string} [options.horizontal]
+     * @param {string} [options.vertical]
      */
-    function positionEmojiPopover() {
-        const buttonRect =
-            elements.iconButton.getBoundingClientRect();
+    function positionPopoverNearElement(
+        popover,
+        anchor,
+        options = {}
+    ) {
+        popover.hidden = false;
+        popover.style.left = "0px";
+        popover.style.top = "0px";
 
-        const popoverWidth =
-            elements.emojiPopover.offsetWidth || 318;
+        const anchorRect =
+            anchor.getBoundingClientRect();
 
-        const popoverHeight =
-            elements.emojiPopover.offsetHeight || 420;
+        const popoverRect =
+            popover.getBoundingClientRect();
 
-        const viewportMargin = 12;
-        const gap = 8;
+        const horizontal =
+            options.horizontal || "left";
 
-        let left = buttonRect.left;
-        let top = buttonRect.bottom + gap;
+        const vertical =
+            options.vertical || "bottom";
 
-        if (
-            left + popoverWidth >
-            window.innerWidth - viewportMargin
-        ) {
+        let left;
+
+        if (horizontal === "right") {
             left =
-                window.innerWidth -
-                popoverWidth -
-                viewportMargin;
+                anchorRect.right -
+                popoverRect.width;
+        } else {
+            left =
+                anchorRect.left;
+        }
+
+        let top;
+
+        if (vertical === "top") {
+            top =
+                anchorRect.top -
+                popoverRect.height -
+                8;
+        } else {
+            top =
+                anchorRect.bottom + 8;
         }
 
         if (
-            top + popoverHeight >
-            window.innerHeight - viewportMargin
+            top + popoverRect.height >
+            window.innerHeight - 8
         ) {
             top =
-                buttonRect.top -
-                popoverHeight -
-                gap;
+                anchorRect.top -
+                popoverRect.height -
+                8;
         }
 
-        left = Math.max(viewportMargin, left);
-        top = Math.max(viewportMargin, top);
+        if (top < 8) {
+            top = 8;
+        }
 
-        elements.emojiPopover.style.left =
+        left = clamp(
+            left,
+            8,
+            window.innerWidth -
+                popoverRect.width -
+                8
+        );
+
+        popover.style.left =
             `${left}px`;
 
-        elements.emojiPopover.style.top =
+        popover.style.top =
             `${top}px`;
-
-        elements.emojiPopover.style.right =
-            "auto";
-
-        elements.emojiPopover.style.bottom =
-            "auto";
-    }
-
-    /**
-     * Handles emoji selection.
-     *
-     * @param {MouseEvent} event
-     */
-    function handleEmojiSelection(event) {
-        if (!(event.target instanceof Element)) {
-            return;
-        }
-
-        const button =
-            event.target.closest(".emoji-button");
-
-        if (!(button instanceof HTMLButtonElement)) {
-            return;
-        }
-
-        const emoji = button.dataset.emoji;
-
-        if (!emoji) {
-            return;
-        }
-
-        currentDocument.icon = emoji;
-        elements.iconDisplay.textContent = emoji;
-
-        updateBrowserMetadata();
-        closeEmojiPopover();
-
-        notifyDocumentChange("change-icon");
-
-        elements.iconButton.focus();
     }
 
     // =========================================================================
-    // Browser metadata
+    // Clipboard
     // =========================================================================
 
     /**
-     * Updates the browser tab title and favicon.
-     */
-    function updateBrowserMetadata() {
-        if (!elements || !currentDocument) {
-            return;
-        }
-
-        const title =
-            currentDocument.title.trim() ||
-            DEFAULT_TITLE;
-
-        const icon =
-            currentDocument.icon ||
-            DEFAULT_ICON;
-
-        document.title =
-            `${icon} ${title} · Note-U`;
-
-        elements.favicon.href =
-            createEmojiFavicon(icon);
-    }
-
-    /**
-     * Creates an SVG data URL favicon from an emoji.
-     *
-     * @param {string} emoji
-     * @returns {string}
-     */
-    function createEmojiFavicon(emoji) {
-        const escapedEmoji = escapeXml(emoji);
-
-        const svg = [
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">',
-            '<text x="50" y="54" dominant-baseline="middle" text-anchor="middle" font-size="82">',
-            escapedEmoji,
-            "</text>",
-            "</svg>"
-        ].join("");
-
-        return `data:image/svg+xml,${encodeURIComponent(svg)}`;
-    }
-
-    /**
-     * Escapes XML-sensitive characters.
+     * Writes text to the clipboard.
      *
      * @param {string} value
+     */
+    async function writeTextToClipboard(
+        value
+    ) {
+        const text =
+            String(value || "");
+
+        if (
+            navigator.clipboard &&
+            typeof navigator.clipboard
+                .writeText === "function" &&
+            window.isSecureContext
+        ) {
+            await navigator.clipboard.writeText(
+                text
+            );
+
+            return;
+        }
+
+        fallbackCopyText(text);
+    }
+
+    /**
+     * Copies text using a temporary textarea.
+     *
+     * @param {string} text
+     */
+    function fallbackCopyText(text) {
+        const textarea =
+            document.createElement(
+                "textarea"
+            );
+
+        textarea.value = text;
+        textarea.setAttribute(
+            "readonly",
+            ""
+        );
+
+        textarea.style.position =
+            "fixed";
+
+        textarea.style.top = "-1000px";
+        textarea.style.left = "-1000px";
+        textarea.style.opacity = "0";
+
+        document.body.appendChild(
+            textarea
+        );
+
+        textarea.select();
+        textarea.setSelectionRange(
+            0,
+            textarea.value.length
+        );
+
+        const successful =
+            document.execCommand("copy");
+
+        textarea.remove();
+
+        if (!successful) {
+            throw new Error(
+                "Clipboard access is unavailable."
+            );
+        }
+    }
+
+    // =========================================================================
+    // Focus helpers
+    // =========================================================================
+
+    /**
+     * Focuses the first editor block.
+     */
+    function focusFirstEditorBlock() {
+        if (
+            window.NoteUEditor &&
+            typeof window.NoteUEditor
+                .focusFirstBlock === "function"
+        ) {
+            window.NoteUEditor
+                .focusFirstBlock();
+        }
+    }
+
+    /**
+     * Returns whether the textarea caret is at its end.
+     *
+     * @param {HTMLTextAreaElement} textarea
+     * @returns {boolean}
+     */
+    function isCaretAtEnd(textarea) {
+        return (
+            textarea.selectionStart ===
+                textarea.value.length &&
+            textarea.selectionEnd ===
+                textarea.value.length
+        );
+    }
+
+    /**
+     * Inserts text at the current textarea selection.
+     *
+     * @param {HTMLTextAreaElement} textarea
+     * @param {string} text
+     */
+    function insertTextIntoTextarea(
+        textarea,
+        text
+    ) {
+        const start =
+            textarea.selectionStart;
+
+        const end =
+            textarea.selectionEnd;
+
+        textarea.setRangeText(
+            text,
+            start,
+            end,
+            "end"
+        );
+    }
+
+    // =========================================================================
+    // Utility helpers
+    // =========================================================================
+
+    /**
+     * Escapes text for inclusion in XML.
+     *
+     * @param {*} value
      * @returns {string}
      */
     function escapeXml(value) {
@@ -673,497 +1384,22 @@
             .replace(/'/g, "&apos;");
     }
 
-    // =========================================================================
-    // Copy link
-    // =========================================================================
-
     /**
-     * Handles the copy-link button.
-     */
-    async function handleCopyLink() {
-        setButtonBusy(
-            elements.copyLinkButton,
-            true
-        );
-
-        try {
-            let url = window.location.href;
-
-            if (copyLinkHandler) {
-                const handlerResult =
-                    await copyLinkHandler();
-
-                if (typeof handlerResult === "string") {
-                    url = handlerResult;
-                }
-            }
-
-            await copyText(url);
-
-            showToast("Link copied");
-        } catch (error) {
-            console.error(
-                "Note-U could not copy the document link.",
-                error
-            );
-
-            showToast(
-                "The link could not be copied",
-                {
-                    type: "error"
-                }
-            );
-        } finally {
-            setButtonBusy(
-                elements.copyLinkButton,
-                false
-            );
-        }
-    }
-
-    /**
-     * Copies text using the Clipboard API with a fallback.
+     * Restricts a number to a range.
      *
-     * @param {string} text
+     * @param {number} value
+     * @param {number} minimum
+     * @param {number} maximum
+     * @returns {number}
      */
-    async function copyText(text) {
-        if (
-            navigator.clipboard &&
-            typeof navigator.clipboard.writeText ===
-                "function" &&
-            window.isSecureContext
-        ) {
-            await navigator.clipboard.writeText(text);
-            return;
-        }
-
-        const textarea =
-            document.createElement("textarea");
-
-        textarea.value = text;
-
-        textarea.setAttribute(
-            "aria-hidden",
-            "true"
-        );
-
-        textarea.style.position = "fixed";
-        textarea.style.top = "-9999px";
-        textarea.style.left = "-9999px";
-
-        document.body.appendChild(textarea);
-
-        textarea.focus();
-        textarea.select();
-
-        const copied =
-            document.execCommand("copy");
-
-        textarea.remove();
-
-        if (!copied) {
-            throw new Error(
-                "The browser rejected the copy command."
-            );
-        }
-    }
-
-    /**
-     * Sets the busy state of a button.
-     *
-     * @param {HTMLButtonElement} button
-     * @param {boolean} isBusy
-     */
-    function setButtonBusy(button, isBusy) {
-        button.disabled = isBusy;
-        button.setAttribute(
-            "aria-busy",
-            isBusy ? "true" : "false"
-        );
-    }
-
-    // =========================================================================
-    // New note
-    // =========================================================================
-
-    /**
-     * Handles the new-note button.
-     */
-    function handleNewNote() {
-        const hasContent =
-            currentDocument.title.trim() !==
-                DEFAULT_TITLE ||
-            currentDocument.icon !== DEFAULT_ICON ||
-            hasMeaningfulEditorContent();
-
-        if (hasContent) {
-            const confirmed = window.confirm(
-                "Create a new note? The current note will remain available only through its existing link."
-            );
-
-            if (!confirmed) {
-                return;
-            }
-        }
-
-        if (newNoteHandler) {
-            newNoteHandler();
-        }
-    }
-
-    /**
-     * Checks whether the editor contains meaningful content.
-     *
-     * @returns {boolean}
-     */
-    function hasMeaningfulEditorContent() {
-        if (
-            !window.NoteUEditor ||
-            typeof window.NoteUEditor.getDocument !==
-                "function"
-        ) {
-            return false;
-        }
-
-        try {
-            const editorDocument =
-                window.NoteUEditor.getDocument();
-
-            return editorDocument.blocks.some(
-                block =>
-                    hasMeaningfulBlockContent(block)
-            );
-        } catch (error) {
-            console.error(
-                "Note-U could not inspect the editor content.",
-                error
-            );
-
-            return false;
-        }
-    }
-
-    /**
-     * Recursively checks for meaningful block content.
-     *
-     * @param {Object} block
-     * @returns {boolean}
-     */
-    function hasMeaningfulBlockContent(block) {
-        if (block.type === "divider") {
-            return true;
-        }
-
-        if (
-            typeof block.content === "string" &&
-            block.content.trim().length > 0
-        ) {
-            return true;
-        }
-
-        if (
-            block.type === "checklist" &&
-            block.checked
-        ) {
-            return true;
-        }
-
-        if (!Array.isArray(block.children)) {
-            return false;
-        }
-
-        return block.children.some(
-            child =>
-                hasMeaningfulBlockContent(child)
-        );
-    }
-
-    // =========================================================================
-    // Add block
-    // =========================================================================
-
-    /**
-     * Handles the global add-block button.
-     */
-    function handleAddBlock() {
-        if (
-            window.NoteUEditor &&
-            typeof window.NoteUEditor.addBlock ===
-                "function"
-        ) {
-            window.NoteUEditor.addBlock({
-                focus: true
-            });
-        }
-    }
-
-    // =========================================================================
-    // Global interactions
-    // =========================================================================
-
-    /**
-     * Closes the emoji popover after an outside click.
-     *
-     * @param {PointerEvent} event
-     */
-    function handleDocumentPointerDown(event) {
-        if (elements.emojiPopover.hidden) {
-            return;
-        }
-
-        if (!(event.target instanceof Node)) {
-            return;
-        }
-
-        const clickedInsidePopover =
-            elements.emojiPopover.contains(
-                event.target
-            );
-
-        const clickedIconButton =
-            elements.iconButton.contains(
-                event.target
-            );
-
-        if (
-            !clickedInsidePopover &&
-            !clickedIconButton
-        ) {
-            closeEmojiPopover();
-        }
-    }
-
-    /**
-     * Handles global keyboard shortcuts.
-     *
-     * @param {KeyboardEvent} event
-     */
-    function handleGlobalKeyDown(event) {
-        if (event.key === "Escape") {
-            closeEmojiPopover();
-        }
-
-        if (
-            (event.ctrlKey || event.metaKey) &&
-            event.key.toLowerCase() === "s"
-        ) {
-            event.preventDefault();
-
-            showToast(
-                "This note is already saved inside its link"
-            );
-        }
-    }
-
-    /**
-     * Handles viewport resizing.
-     */
-    function handleWindowResize() {
-        resizeTitleInput();
-
-        if (!elements.emojiPopover.hidden) {
-            positionEmojiPopover();
-        }
-    }
-
-    /**
-     * Updates the top bar visual state.
-     */
-    function updateTopbarScrollState() {
-        elements.topbar.classList.toggle(
-            "topbar--scrolled",
-            window.scrollY > 4
-        );
-    }
-
-    // =========================================================================
-    // Save status
-    // =========================================================================
-
-    /**
-     * Shows the saving state.
-     */
-    function showSavingStatus() {
-        clearTimeout(saveStatusTimer);
-
-        setSaveStatus(
-            "Saving…",
-            "saving"
-        );
-    }
-
-    /**
-     * Shows the saved state.
-     */
-    function showSavedStatus() {
-        setSaveStatus(
-            "Saved in link",
-            "saved"
-        );
-
-        clearTimeout(saveStatusTimer);
-
-        saveStatusTimer = window.setTimeout(
-            () => {
-                setSaveStatus(
-                    "Ready",
-                    "idle"
-                );
-            },
-            SAVE_STATUS_RESET_DELAY
-        );
-    }
-
-    /**
-     * Shows the save error state.
-     *
-     * @param {string} [message]
-     */
-    function showSaveError(
-        message = "Save failed"
+    function clamp(
+        value,
+        minimum,
+        maximum
     ) {
-        clearTimeout(saveStatusTimer);
-
-        setSaveStatus(
-            message,
-            "error"
-        );
-    }
-
-    /**
-     * Updates the save status element.
-     *
-     * @param {string} text
-     * @param {string} state
-     */
-    function setSaveStatus(text, state) {
-        if (!elements) {
-            return;
-        }
-
-        elements.saveStatus.textContent = text;
-        elements.saveStatus.dataset.state = state;
-    }
-
-    // =========================================================================
-    // Toast notifications
-    // =========================================================================
-
-    /**
-     * Displays a temporary notification.
-     *
-     * @param {string} message
-     * @param {Object} [options]
-     * @param {string} [options.type]
-     * @param {number} [options.duration]
-     */
-    function showToast(message, options = {}) {
-        if (!elements || !message) {
-            return;
-        }
-
-        clearTimeout(activeToastTimer);
-        elements.toastRegion.replaceChildren();
-
-        const toast =
-            document.createElement("div");
-
-        toast.className = "toast";
-        toast.textContent = message;
-
-        if (options.type === "error") {
-            toast.classList.add("toast--error");
-        }
-
-        elements.toastRegion.appendChild(toast);
-
-        requestAnimationFrame(() => {
-            toast.classList.add("toast--visible");
-        });
-
-        const duration =
-            Number.isFinite(options.duration)
-                ? options.duration
-                : TOAST_DURATION;
-
-        activeToastTimer = window.setTimeout(
-            () => {
-                toast.classList.remove(
-                    "toast--visible"
-                );
-
-                window.setTimeout(
-                    () => {
-                        toast.remove();
-                    },
-                    220
-                );
-            },
-            duration
-        );
-    }
-
-    // =========================================================================
-    // Loading state
-    // =========================================================================
-
-    /**
-     * Sets the application loading state.
-     *
-     * @param {boolean} isLoading
-     */
-    function setLoading(isLoading) {
-        if (!elements) {
-            return;
-        }
-
-        elements.app.dataset.loading =
-            isLoading ? "true" : "false";
-    }
-
-    // =========================================================================
-    // Change notifications
-    // =========================================================================
-
-    /**
-     * Notifies the application about metadata changes.
-     *
-     * @param {string} reason
-     */
-    function notifyDocumentChange(reason) {
-        if (!documentChangeHandler) {
-            return;
-        }
-
-        documentChangeHandler(
-            getDocument(),
-            {
-                reason
-            }
-        );
-    }
-
-    // =========================================================================
-    // Utility helpers
-    // =========================================================================
-
-    /**
-     * Escapes a value for use inside a CSS selector.
-     *
-     * @param {string} value
-     * @returns {string}
-     */
-    function escapeSelector(value) {
-        if (
-            window.CSS &&
-            typeof window.CSS.escape === "function"
-        ) {
-            return window.CSS.escape(value);
-        }
-
-        return String(value).replace(
-            /["\\]/g,
-            "\\$&"
+        return Math.min(
+            Math.max(value, minimum),
+            maximum
         );
     }
 
@@ -1171,22 +1407,29 @@
     // Public API
     // =========================================================================
 
-    window.NoteUUI = Object.freeze({
-        initialize,
+    const publicApi =
+        Object.freeze({
+            initialize,
+            setDocument,
+            getHeaderData,
 
-        getDocument,
-        setDocument,
+            setIcon,
+            resetIcon,
 
-        setLoading,
+            updateBrowserTitle,
+            updateFavicon,
+            updateUrlSize,
+            clearUrlSize,
 
-        showSavingStatus,
-        showSavedStatus,
-        showSaveError,
-        showToast,
+            copyCurrentLink,
 
-        openEmojiPopover,
-        closeEmojiPopover,
+            showToast,
+            showError,
+            closeError,
 
-        updateBrowserMetadata
-    });
+            closeMenus
+        });
+
+    window.NoteUUI =
+        publicApi;
 })();
