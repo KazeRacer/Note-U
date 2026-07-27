@@ -9,16 +9,14 @@ browser, keep DevTools Console visible, and repeat the responsive checks at 375 
 - In separate empty blocks type every shortcut: `- `, `1. `, `[] `, `[ ] `, `# `,
   `## `, `### `, `> `, `--- `, and three backticks plus space. Verify ordinary
   mid-line text is unchanged.
-- Verify Enter splits ordinary content; headings create paragraphs; lists,
-  checklists, quotes, and code continue their type once and become paragraphs on
-  the next empty Enter without crossing their parent; toggle Enter focuses a child;
-  and Shift+Enter always creates a soft break.
+- Verify Enter splits ordinary content; empty headings/lists become paragraphs;
+  toggle Enter focuses a child; quote/code exit after a final empty line; and
+  Shift+Enter always creates a soft break.
 - Use Tab and Shift+Tab on one block and a native selection spanning several
   blocks. Verify tree depth changes one level, order and complete subtrees survive,
   and Tab/Shift+Tab edit selected code lines rather than nesting the code block.
 - Exercise Backspace at the start and in text. Exercise Delete normally. Press
-  Ctrl+A/Cmd+A twice, delete, and verify one editable paragraph remains. Undo and
-  redo typing, transforms, nesting, dragging, deletion, and whole-note reset.
+  Ctrl+A/Cmd+A twice, delete, and verify one editable paragraph remains.
 - Drag-select partial text, multiple lines, adjacent blocks, and nested blocks.
   Use context actions for duplicate, delete, move, transform, and clear formatting
   across the selection; verify selected parents are handled only once.

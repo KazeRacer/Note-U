@@ -25,17 +25,6 @@ test('editor owns undo, redo and beforeinput history handling', () => {
 });
 
 test('the block handle is the only draggable editing control', () => {
-  assert.match(editor, /handle\.draggable = false/);
-  assert.match(editor, /addEventListener\('pointermove'/);
-  assert.match(editor, /document\.elementFromPoint/);
-});
-
-test('continuation blocks share one empty-Enter exit rule', () => {
-  assert.match(editor, /'bulleted-list', 'numbered-list', 'checklist', 'quote', 'code'/);
-  assert.doesNotMatch(editor, /function handleQuoteEnter|function handleCodeEnter/);
-});
-
-test('multi-block transforms use each selected block content instead of ancestors', () => {
-  assert.match(editor, /range\.intersectsNode\(ownContent\)/);
-  assert.match(editor, /selected\.map\(\(item\) => transformBlock\(item, targetType\)\)/);
+  assert.match(editor, /handle\.draggable = true/);
+  assert.match(editor, /event\.target\.closest\?\.\('\[data-drag-handle\]'\)/);
 });

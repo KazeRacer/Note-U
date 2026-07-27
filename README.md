@@ -34,7 +34,7 @@ number. Legacy flat blocks with indent metadata are converted into this tree onl
 at the load boundary. Pasted multiline plain text becomes one paragraph per line;
 clipboard HTML is never inserted.
 
-Enter after a non-empty heading creates a paragraph. Lists, checklists, quotes and
-code continue as the same block type on the first Enter; Enter on the resulting
-empty continuation converts it to a paragraph in the same parent. Ctrl+A/Cmd+A
-first selects the current block content and the next press selects the complete editor.
+Enter after a non-empty heading creates a paragraph. Quote and code Enter inserts a
+line, and a second Enter at the final empty line exits to a paragraph. Ctrl+A/Cmd+A
+first selects the current block content and the next press selects the complete
+editor.

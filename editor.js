@@ -72,7 +72,7 @@
       handle.contentEditable = 'false';
       handle.setAttribute('data-drag-handle', 'true');
       handle.setAttribute('aria-label', 'Block actions');
-      handle.draggable = false;
+      handle.draggable = true;
       handle.textContent = '⋮⋮';
       return handle;
     }
@@ -257,9 +257,6 @@
       }
       const range = selection.getRangeAt(0);
       const blocks = [...root.querySelectorAll('.block')].filter((block) => {
-        const ownContent = getContentElement(block)
-          || block.querySelector(':scope > .block-main > .block-divider');
-        if (!ownContent) return false;
         try {
           return range.intersectsNode(ownContent);
         } catch {
@@ -603,6 +600,77 @@
       return true;
     }
 
+    function handleCodeEnter(event, block, content, range) {
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        const paragraph = createBlock('paragraph');
+        insertAfter(block, paragraph);
+        focusAtStart(getContentElement(paragraph));
+        emitChange();
+        return true;
+      }
+
+      const textBeforeRange = document.createRange();
+      textBeforeRange.selectNodeContents(content);
+      textBeforeRange.setEnd(range.startContainer, range.startOffset);
+      const textBefore = textBeforeRange.toString();
+
+      if (range.collapsed && isCaretAtEnd(content, range) && textBefore.endsWith('\n')) {
+        event.preventDefault();
+        content.textContent = textBefore.slice(0, -1);
+        const paragraph = createBlock('paragraph');
+        insertAfter(block, paragraph);
+        focusAtStart(getContentElement(paragraph));
+        emitChange();
+        return true;
+      }
+
+      event.preventDefault();
+      insertTextAtSelection('\n');
+      emitChange();
+      return true;
+    }
+
+    function handleQuoteEnter(event, block, content, range) {
+      const before = document.createRange();
+      before.selectNodeContents(content);
+      before.setEnd(range.startContainer, range.startOffset);
+      const textBefore = before.toString();
+      if (range.collapsed && isCaretAtEnd(content, range) && textBefore.endsWith('\n')) {
+        event.preventDefault();
+        content.textContent = textBefore.slice(0, -1);
+        const paragraph = createBlock('paragraph');
+        insertAfter(block, paragraph);
+        focusAtStart(getContentElement(paragraph));
+        emitChange();
+        return true;
+      }
+      event.preventDefault();
+      insertTextAtSelection('\n');
+      emitChange();
+      return true;
+    }
+
+    function handleQuoteEnter(event, block, content, range) {
+      const before = document.createRange();
+      before.selectNodeContents(content);
+      before.setEnd(range.startContainer, range.startOffset);
+      const textBefore = before.toString();
+      if (range.collapsed && isCaretAtEnd(content, range) && textBefore.endsWith('\n')) {
+        event.preventDefault();
+        content.textContent = textBefore.slice(0, -1);
+        const paragraph = createBlock('paragraph');
+        insertAfter(block, paragraph);
+        focusAtStart(getContentElement(paragraph));
+        emitChange();
+        return true;
+      }
+      event.preventDefault();
+      document.execCommand('insertText', false, '\n');
+      emitChange();
+      return true;
+    }
+
     function handleEnter(event) {
       const selection = window.getSelection();
       if (!selectionInsideRoot(selection) || selection.rangeCount === 0) return false;
@@ -646,14 +714,16 @@
         return true;
       }
 
+      if (block.dataset.type === 'code') {
+        return handleCodeEnter(event, block, content, range);
+      }
+
+      if (block.dataset.type === 'quote') {
+        return handleQuoteEnter(event, block, content, range);
+      }
+
       const empty = isContentEmpty(content);
       if (empty) {
-        if (['bulleted-list', 'numbered-list', 'checklist', 'quote', 'code', 'heading-1', 'heading-2', 'heading-3'].includes(block.dataset.type)) {
-          event.preventDefault();
-          replaceBlockWithParagraph(block);
-          return true;
-        }
-
         if (block.parentElement?.classList.contains('block-children')) {
           event.preventDefault();
           outdentBlock(block);
@@ -1652,7 +1722,7 @@
 
       const text = getPlainText(content);
 
-      if (block.dataset.type === 'code') {
+      if (block.dataset.type === 'code' || block.dataset.type === 'quote') {
         onCloseMenu();
         emitChange();
         return;
@@ -1737,16 +1807,24 @@
       }
     }, { capture: true, signal });
 
-    root.addEventListener('pointermove', (event) => {
-      if (!armedDragBlock || event.pointerId !== dragPointerId) return;
-      if (!draggedBlock && Math.hypot(event.clientX - dragStartX, event.clientY - dragStartY) < 5) return;
-      event.preventDefault();
-      if (!draggedBlock) {
-        draggedBlock = armedDragBlock;
-        draggedBlock.classList.add('dragging');
-        suppressHandleClick = true;
+    root.addEventListener('dragstart', (event) => {
+      const handle = event.target.closest?.('[data-drag-handle]');
+      const block = handle?.closest('.block');
+      if (!block) {
+        event.preventDefault();
+        return;
       }
-      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('.block');
+
+      armedDragBlock = block;
+      draggedBlock = block;
+      draggedBlock.classList.add('dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', draggedBlock.dataset.blockId);
+    }, { capture: true, signal });
+
+    root.addEventListener('dragover', (event) => {
+      if (!draggedBlock) return;
+      const target = event.target.closest?.('.block');
       if (!target || target === draggedBlock || target.contains(draggedBlock) || draggedBlock.contains(target)) return;
       clearDragIndicators();
 
