@@ -3,8 +3,8 @@
 Serve the repository with `python3 -m http.server 4173`, open the page in a desktop
 browser, keep DevTools Console visible, and repeat the responsive checks at 375 px.
 
-Before interaction, inspect the page source and confirm application version 0.7.0
-and `editor.js?v=0.7.0`; an older value means the new editor is not deployed.
+Before interaction, inspect the page source and confirm application version 0.7.1
+and `editor.js?v=0.7.1`; an older value means the new editor is not deployed.
 
 - Create paragraph, H1, H2, H3, bullet, number, checklist, toggle, quote, code, and
   divider blocks from the slash menu. Filter with `/todo`, `/heading`, `/code`, and

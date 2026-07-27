@@ -6,6 +6,7 @@ const test = require('node:test');
 
 const editor = fs.readFileSync('editor.js', 'utf8');
 const html = fs.readFileSync('index.html', 'utf8');
+const ui = fs.readFileSync('ui.js', 'utf8');
 
 test('only block contents are editing hosts', () => {
   assert.match(html, /id="editor"[\s\S]*?contenteditable="false"/);
@@ -37,4 +38,15 @@ test('undo, multi-block transforms and plain-text paste remain integrated', () =
   assert.match(editor, /function recordHistory/);
   assert.match(editor, /blocks\.map\(\(item\) =>/);
   assert.match(editor, /getData\('text\/plain'\)/);
+});
+
+test('soft Enter inserts a newline immediately and empty toggle children exit', () => {
+  assert.match(editor, /if \(event\.shiftKey\) \{\s*insertText\('\\n'\)/);
+  assert.match(editor, /function exitToggle\(block\)/);
+  assert.match(editor, /type === 'paragraph' && empty\(content\) && exitToggle\(block\)/);
+});
+
+test('slash menu arrow navigation clamps at both ends', () => {
+  assert.match(ui, /Math\.max\(0, Math\.min\(selectedIndex \+ delta, menuState\.items\.length - 1\)\)/);
+  assert.doesNotMatch(ui, /selectedIndex \+ delta \+ menuState\.items\.length\) %/);
 });

@@ -42,6 +42,9 @@ Enter after a non-empty heading creates a paragraph. Lists, checklists, quotes a
 code continue as the same block type on the first Enter; Enter on the resulting
 empty continuation converts it to a paragraph in the same parent. Ctrl+A/Cmd+A
 first selects the current block content and the next press selects the complete editor.
+An empty final paragraph in a toggle exits that toggle only; nested toggles therefore
+unwind one container at a time. The first Backspace/Delete or Tab immediately after
+that exit is guarded so it cannot accidentally move focus or re-nest the paragraph.
 
 ## Merging editor changes
 

@@ -22,3 +22,9 @@ test('index stays a lightweight shell without an inline implementation', () => {
   assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>[\s\S]*?\S[\s\S]*?<\/script>/i);
   assert.doesNotMatch(html, /<style\b/i);
 });
+
+test('shared links identify the application as Note-U', () => {
+  assert.match(html, /<title>Note-U<\/title>/);
+  assert.match(html, /property="og:title" content="Note-U"/);
+  assert.match(html, /name="application-name" content="Note-U"/);
+});

@@ -354,14 +354,6 @@
       restoringHistory = false;
       focus(contentOf(root.querySelector('.block')), true);
       onChange(serialize());
-      return true;
-    }
-
-    function handleHistoryShortcut(event) {
-      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'z') return false;
-      event.preventDefault();
-      restoreHistory(historyIndex + (event.shiftKey ? 1 : -1));
-      return true;
     }
 
     function replace(block, targetType, data = {}) {
@@ -404,23 +396,24 @@
       changed();
     }
 
-    function softBreak() {
-      const selection = window.getSelection();
-      if (!selection?.rangeCount) return;
-      const range = selection.getRangeAt(0);
-      range.deleteContents();
-      const br = document.createElement('br');
-      range.insertNode(br);
-      range.setStartAfter(br);
-      range.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(range);
+    function exitToggle(block) {
+      const body = block.parentElement;
+      if (!body?.classList.contains('toggle-body') || body.lastElementChild !== block) return false;
+      const toggle = body.closest('.block[data-type="toggle"]');
+      if (!toggle) return false;
+      block.remove();
+      const paragraph = createBlock('paragraph');
+      paragraph.dataset.exitedContainer = toggle.dataset.blockId;
+      toggle.insertAdjacentElement('afterend', paragraph);
+      focus(contentOf(paragraph));
+      changed();
+      return true;
     }
 
     function enter(event, block, content) {
       event.preventDefault();
       if (event.shiftKey) {
-        softBreak();
+        insertText('\n');
         changed();
         return;
       }
@@ -444,6 +437,7 @@
         changed();
         return;
       }
+      if (type === 'paragraph' && empty(content) && exitToggle(block)) return;
       if (empty(content) && (CONTINUATION_TYPES.has(type) || HEADING_TYPES.has(type))) {
         const paragraph = replace(block, 'paragraph');
         focus(contentOf(paragraph));
@@ -490,6 +484,10 @@
 
     function tab(event, block) {
       event.preventDefault();
+      if (block.dataset.exitedContainer) {
+        delete block.dataset.exitedContainer;
+        return;
+      }
       if (block.dataset.type === 'code' && window.getSelection().isCollapsed) {
         if (event.shiftKey) {
           const selection = window.getSelection();
@@ -523,6 +521,11 @@
 
     function backspace(event, block, content) {
       if (!caretAtStart(content)) return;
+      if (block.dataset.exitedContainer) {
+        event.preventDefault();
+        delete block.dataset.exitedContainer;
+        return;
+      }
       const parentBlock = block.parentElement?.closest('.block');
       if (parentBlock) {
         event.preventDefault();
@@ -759,6 +762,11 @@
       const content = event.target.closest?.('[data-block-content]');
       const block = blockFrom(content);
       if (!block || !content) return;
+      if ((event.key === 'Backspace' || event.key === 'Delete') && block.dataset.exitedContainer) {
+        event.preventDefault();
+        delete block.dataset.exitedContainer;
+        return;
+      }
       if (selectAll(event, content)) return;
       if ((event.key === 'Backspace' || event.key === 'Delete') && !window.getSelection().isCollapsed) {
         const blocks = selectedBlocks(block);
@@ -790,6 +798,7 @@
       const content = event.target.closest?.('[data-block-content]') || contentOf(currentBlock());
       const block = blockFrom(content);
       if (!content || !block) return;
+      delete block.dataset.exitedContainer;
       if (block.dataset.type !== 'code' && shortcut(block, content)) return;
       slash(block, content);
       changed();

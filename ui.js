@@ -381,7 +381,7 @@
 
     function moveSelection(delta) {
       if (!menuState?.items?.length) return;
-      selectedIndex = (selectedIndex + delta + menuState.items.length) % menuState.items.length;
+      selectedIndex = Math.max(0, Math.min(selectedIndex + delta, menuState.items.length - 1));
       renderMenu();
     }
 
