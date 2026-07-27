@@ -60,7 +60,8 @@
 
     function cleanHtml(html) {
       if (typeof html !== 'string' || !html.trim()) return '<br>';
-      return html;
+      const sanitized = window.NoteStorage?.sanitizeInlineHtml(html) || html;
+      return sanitized || '<br>';
     }
 
     function createHandle() {
@@ -219,6 +220,23 @@
       const selection = window.getSelection();
       if (!selection || selection.rangeCount === 0) return activeMenuBlock;
       return getBlockFromNode(selection.anchorNode) || activeMenuBlock;
+    }
+
+    function getSelectedBlocks(fallback = null) {
+      const selection = window.getSelection();
+      if (!selectionInsideRoot(selection) || selection.isCollapsed) {
+        return fallback ? [fallback] : [];
+      }
+      const range = selection.getRangeAt(0);
+      const blocks = [...root.querySelectorAll('.block')].filter((block) => {
+        if (block.parentElement?.closest('.block')) return false;
+        try {
+          return range.intersectsNode(block);
+        } catch {
+          return false;
+        }
+      });
+      return blocks.length ? blocks : (fallback ? [fallback] : []);
     }
 
     function selectionInsideRoot(selection = window.getSelection()) {
@@ -546,6 +564,13 @@
         return false;
       }
 
+      if (event.shiftKey && block.dataset.type !== 'code') {
+        event.preventDefault();
+        document.execCommand('insertLineBreak', false);
+        emitChange();
+        return true;
+      }
+
       const inToggleTitle = content.classList.contains('toggle-title');
       if (inToggleTitle) {
         event.preventDefault();
@@ -628,11 +653,14 @@
         return true;
       }
 
-      if (event.shiftKey) {
-        outdentBlock(block);
-      } else {
-        indentBlock(block);
-      }
+      const selectedBlocks = getSelectedBlocks(block);
+      suppressChange = true;
+      selectedBlocks.forEach((selectedBlock) => {
+        const indent = clampIndent(selectedBlock.dataset.indent) + (event.shiftKey ? -1 : 1);
+        setBlockIndent(selectedBlock, indent);
+      });
+      suppressChange = false;
+      emitChange();
 
       return true;
     }
@@ -676,6 +704,22 @@
           block.remove();
           focusAtEnd(getContentElement(previous));
           ensureRootHasBlock();
+          emitChange();
+          return true;
+        }
+      }
+
+      const previous = block.previousElementSibling;
+      if (previous?.classList.contains('block')) {
+        const previousContent = getContentElement(previous);
+        if (previousContent && previous.dataset.type !== 'divider') {
+          event.preventDefault();
+          const fragment = document.createDocumentFragment();
+          [...content.childNodes].forEach((node) => fragment.append(node));
+          if (previousContent.innerHTML === '<br>') previousContent.replaceChildren();
+          previousContent.append(fragment);
+          block.remove();
+          focusAtEnd(previousContent);
           emitChange();
           return true;
         }
@@ -950,6 +994,22 @@
       const source = block || activeMenuBlock || getCurrentBlock();
       if (!source) return null;
 
+      const sources = getSelectedBlocks(source);
+      if (sources.length > 1) {
+        let insertionPoint = sources[sources.length - 1];
+        const clones = sources.map((selectedBlock) => {
+          const clone = selectedBlock.cloneNode(true);
+          clone.dataset.blockId = nextBlockId();
+          clone.querySelectorAll('.block').forEach((child) => { child.dataset.blockId = nextBlockId(); });
+          insertionPoint.insertAdjacentElement('afterend', clone);
+          insertionPoint = clone;
+          return clone;
+        });
+        focusAtEnd(getContentElement(clones[clones.length - 1]));
+        emitChange();
+        return clones;
+      }
+
       const clone = source.cloneNode(true);
       clone.classList.remove('dragging', 'drag-target-before', 'drag-target-after');
       clone.draggable = false;
@@ -969,6 +1029,18 @@
     function deleteBlock(block = null) {
       const target = block || activeMenuBlock || getCurrentBlock();
       if (!target) return;
+
+      const targets = getSelectedBlocks(target);
+      if (targets.length > 1) {
+        const previous = targets[0].previousElementSibling;
+        const next = targets[targets.length - 1].nextElementSibling;
+        targets.forEach((selectedBlock) => selectedBlock.remove());
+        ensureRootHasBlock();
+        const focusTarget = previous?.classList.contains('block') ? previous : next || root.querySelector('.block');
+        focusAtEnd(getContentElement(focusTarget));
+        emitChange();
+        return;
+      }
 
       const previous = target.previousElementSibling;
       const next = target.nextElementSibling;
@@ -1210,13 +1282,65 @@
       if (!selectionInsideRoot(selection)) return;
 
       const text = event.clipboardData?.getData('text/plain') || '';
-      if (!text || !URL_PATTERN.test(text)) {
-        URL_PATTERN.lastIndex = 0;
-        return;
-      }
+      const clipboardHtml = event.clipboardData?.getData('text/html') || '';
+      if (!text && !clipboardHtml) return;
       URL_PATTERN.lastIndex = 0;
 
       event.preventDefault();
+
+      // Clipboard HTML is never inserted directly. Keeping only the supported
+      // inline vocabulary removes images, embeds, tracking pixels and office markup.
+      if (clipboardHtml && /<(?:p|div|h[1-3]|blockquote|pre|ul|ol|hr|details)\b/i.test(clipboardHtml)) {
+        const template = document.createElement('template');
+        template.innerHTML = clipboardHtml;
+        template.content.querySelectorAll(
+          'img,picture,source,video,audio,iframe,object,embed,script,style,svg,canvas,form'
+        ).forEach((element) => element.remove());
+        const pastedBlocks = [];
+        [...template.content.childNodes].forEach((node) => pastedBlocks.push(...migrateNode(node)));
+        const block = getBlockFromNode(selection.anchorNode);
+        if (block && pastedBlocks.length) {
+          pastedBlocks.forEach((newBlock) => insertBefore(block, newBlock));
+          if (isContentEmpty(getContentElement(block))) block.remove();
+          focusAtEnd(getContentElement(pastedBlocks[pastedBlocks.length - 1]));
+          emitChange();
+          return;
+        }
+      }
+
+      if (clipboardHtml && !/[\r\n]/.test(text)) {
+        const sanitized = window.NoteStorage.sanitizeInlineHtml(clipboardHtml);
+        if (sanitized) {
+          const template = document.createElement('template');
+          template.innerHTML = sanitized;
+          insertFragmentAtSelection(template.content);
+          emitChange();
+          return;
+        }
+      }
+
+      if (text.includes('\n')) {
+        const block = getBlockFromNode(selection.anchorNode);
+        const lines = text.replace(/\r\n?/g, '\n').split('\n');
+        const blocks = lines.map((line) => createBlock('paragraph', {
+          html: escapeHtml(line) || '<br>'
+        }));
+        if (block) {
+          blocks.forEach((newBlock) => insertBefore(block, newBlock));
+          if (isContentEmpty(getContentElement(block))) block.remove();
+          focusAtEnd(getContentElement(blocks[blocks.length - 1]));
+          emitChange();
+        }
+        return;
+      }
+
+      if (!URL_PATTERN.test(text)) {
+        URL_PATTERN.lastIndex = 0;
+        insertTextAtSelection(text);
+        emitChange();
+        return;
+      }
+      URL_PATTERN.lastIndex = 0;
 
       const matches = text.match(URL_PATTERN) || [];
       const isSingleUrl = matches.length === 1 && text.trim() === matches[0];

@@ -109,10 +109,17 @@
   }
 
   function createNewNote() {
-    window.clearTimeout(saveTimer);
-    NoteStorage.clearUrl({ replace: false });
-    loadNote(NoteStorage.cloneDefaultNote());
-    editor.focus();
+    // Keep the current note URL intact and open a clean note in a separate tab.
+    saveNow();
+    const newNoteUrl = new URL(window.location.href);
+    newNoteUrl.hash = '';
+    const link = document.createElement('a');
+    link.href = newNoteUrl.href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.append(link);
+    link.click();
+    link.remove();
   }
 
   ui = NoteUI.create({
