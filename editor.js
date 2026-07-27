@@ -15,7 +15,6 @@
     'code'
   ]);
 
-  const MAX_INDENT = 8;
   const URL_PATTERN = /https?:\/\/[^\s<]+/gi;
 
   function createEditor(options) {
@@ -39,6 +38,9 @@
     let dragTargetPosition = null;
     let suppressChange = false;
     let blockCounter = 0;
+    let historyEntries = [];
+    let historyIndex = -1;
+    let applyingHistory = false;
 
     const abortController = new AbortController();
     const { signal } = abortController;
@@ -50,12 +52,6 @@
 
     function normalizeType(type) {
       return BLOCK_TYPES.has(type) ? type : 'paragraph';
-    }
-
-    function clampIndent(value) {
-      const numericValue = Number.parseInt(value, 10);
-      if (!Number.isFinite(numericValue)) return 0;
-      return Math.max(0, Math.min(MAX_INDENT, numericValue));
     }
 
     function cleanHtml(html) {
@@ -72,6 +68,7 @@
       handle.contentEditable = 'false';
       handle.setAttribute('data-drag-handle', 'true');
       handle.setAttribute('aria-label', 'Block actions');
+      handle.draggable = true;
       handle.textContent = '⋮⋮';
       return handle;
     }
@@ -89,7 +86,6 @@
       const block = document.createElement('div');
       block.className = 'block';
       block.dataset.type = normalizedType;
-      block.dataset.indent = String(clampIndent(options.indent || 0));
       block.dataset.blockId = options.id || nextBlockId();
       block.draggable = false;
 
@@ -104,6 +100,11 @@
         divider.className = 'block-divider';
         divider.contentEditable = 'false';
         main.append(divider);
+        const children = document.createElement('div');
+        children.className = 'block-children';
+        children.setAttribute('data-block-children', 'true');
+        (options.children || []).forEach((child) => children.append(child));
+        block.append(children);
         return block;
       }
 
@@ -148,6 +149,11 @@
         pre.textContent = options.text || htmlToPlainText(options.html || '');
         if (!pre.textContent) pre.append(document.createElement('br'));
         main.append(pre);
+        const children = document.createElement('div');
+        children.className = 'block-children';
+        children.setAttribute('data-block-children', 'true');
+        (options.children || []).forEach((child) => children.append(child));
+        block.append(children);
         return block;
       }
 
@@ -180,6 +186,11 @@
 
       row.append(createEditableContent('block-content', options.html || '<br>'));
       main.append(row);
+      const children = document.createElement('div');
+      children.className = 'block-children';
+      children.setAttribute('data-block-children', 'true');
+      (options.children || []).forEach((child) => children.append(child));
+      block.append(children);
       return block;
     }
 
@@ -200,6 +211,19 @@
     function getToggleBody(block) {
       if (!block || block.dataset.type !== 'toggle') return null;
       return block.querySelector(':scope > .block-main > .toggle-body');
+    }
+
+    function getChildContainer(block) {
+      if (!block) return null;
+      if (block.dataset.type === 'toggle') return getToggleBody(block);
+      let container = block.querySelector(':scope > .block-children');
+      if (!container) {
+        container = document.createElement('div');
+        container.className = 'block-children';
+        container.setAttribute('data-block-children', 'true');
+        block.append(container);
+      }
+      return container;
     }
 
     function getBlockFromNode(node) {
@@ -229,14 +253,14 @@
       }
       const range = selection.getRangeAt(0);
       const blocks = [...root.querySelectorAll('.block')].filter((block) => {
-        if (block.parentElement?.closest('.block')) return false;
         try {
           return range.intersectsNode(block);
         } catch {
           return false;
         }
       });
-      return blocks.length ? blocks : (fallback ? [fallback] : []);
+      const topmost = blocks.filter((block) => !blocks.some((candidate) => candidate !== block && candidate.contains(block)));
+      return topmost.length ? topmost : (fallback ? [fallback] : []);
     }
 
     function selectionInsideRoot(selection = window.getSelection()) {
@@ -306,19 +330,18 @@
       if (isContentEmpty(content)) content.innerHTML = '<br>';
     }
 
-    function setBlockIndent(block, indent) {
-      if (!block) return;
-      block.dataset.indent = String(clampIndent(indent));
-      refreshNumberedMarkers();
-      emitChange();
-    }
-
     function indentBlock(block) {
-      setBlockIndent(block, clampIndent(block?.dataset.indent) + 1);
+      const previous = block?.previousElementSibling;
+      if (!previous?.classList.contains('block')) return false;
+      getChildContainer(previous).append(block);
+      return true;
     }
 
     function outdentBlock(block) {
-      setBlockIndent(block, clampIndent(block?.dataset.indent) - 1);
+      const parentBlock = block?.parentElement?.closest('.block');
+      if (!parentBlock) return false;
+      parentBlock.insertAdjacentElement('afterend', block);
+      return true;
     }
 
     function insertAfter(referenceBlock, newBlock) {
@@ -358,7 +381,76 @@
       if (suppressChange) return;
       updateEmptyState();
       refreshNumberedMarkers();
+      recordHistory();
       onChange(serialize());
+    }
+
+    function recordHistory() {
+      if (applyingHistory) return;
+      const data = JSON.stringify(serialize());
+      if (historyEntries[historyIndex]?.data === data) return;
+      const block = getCurrentBlock();
+      const content = getContentElement(block);
+      const selection = window.getSelection();
+      let offset = 0;
+      if (content && selectionInsideRoot(selection)) {
+        const before = document.createRange();
+        before.selectNodeContents(content);
+        try {
+          before.setEnd(selection.anchorNode, selection.anchorOffset);
+          offset = before.toString().length;
+        } catch {
+          offset = 0;
+        }
+      }
+      const snapshot = { data, blockId: block?.dataset.blockId || '', offset };
+      historyEntries = historyEntries.slice(0, historyIndex + 1);
+      historyEntries.push(snapshot);
+      if (historyEntries.length > 200) historyEntries.shift();
+      historyIndex = historyEntries.length - 1;
+    }
+
+    function restoreHistory(nextIndex) {
+      if (nextIndex < 0 || nextIndex >= historyEntries.length || nextIndex === historyIndex) return false;
+      applyingHistory = true;
+      try {
+        historyIndex = nextIndex;
+        const snapshot = historyEntries[historyIndex];
+        load(JSON.parse(snapshot.data), { preserveHistory: true });
+        const escapedId = window.CSS?.escape ? window.CSS.escape(snapshot.blockId) : snapshot.blockId.replace(/[^a-zA-Z0-9_-]/g, '');
+        const block = root.querySelector(`[data-block-id="${escapedId}"]`) || root.querySelector('.block');
+        const content = getContentElement(block);
+        const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+        let remaining = snapshot.offset;
+        let node = null;
+        while (walker.nextNode()) {
+          node = walker.currentNode;
+          if (remaining <= node.textContent.length) break;
+          remaining -= node.textContent.length;
+        }
+        if (node) {
+          const range = document.createRange();
+          range.setStart(node, Math.min(remaining, node.textContent.length));
+          range.collapse(true);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          content.focus();
+        } else {
+          focusAtEnd(content);
+        }
+      } finally {
+        applyingHistory = false;
+      }
+      onChange(serialize());
+      return true;
+    }
+
+    function handleHistoryShortcut(event) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'z') return false;
+      event.preventDefault();
+      restoreHistory(historyIndex + (event.shiftKey ? 1 : -1));
+      return true;
     }
 
     function createContentsRange(node) {
@@ -467,7 +559,6 @@
         : currentType;
 
       const nextBlock = createBlock(nextType, {
-        indent: block.dataset.indent,
         html: rightHtml,
         checked: false
       });
@@ -481,7 +572,6 @@
     function replaceBlockWithParagraph(block) {
       const currentContent = getContentElement(block);
       const paragraph = createBlock('paragraph', {
-        indent: block.dataset.indent,
         html: currentContent?.innerHTML || '<br>'
       });
       block.replaceWith(paragraph);
@@ -499,9 +589,7 @@
       if (!isLastChild) return false;
 
       block.remove();
-      const paragraph = createBlock('paragraph', {
-        indent: toggle.dataset.indent
-      });
+      const paragraph = createBlock('paragraph');
       insertAfter(toggle, paragraph);
       focusAtStart(getContentElement(paragraph));
       emitChange();
@@ -511,9 +599,7 @@
     function handleCodeEnter(event, block, content, range) {
       if (event.ctrlKey || event.metaKey) {
         event.preventDefault();
-        const paragraph = createBlock('paragraph', {
-          indent: block.dataset.indent
-        });
+        const paragraph = createBlock('paragraph');
         insertAfter(block, paragraph);
         focusAtStart(getContentElement(paragraph));
         emitChange();
@@ -528,9 +614,7 @@
       if (range.collapsed && isCaretAtEnd(content, range) && textBefore.endsWith('\n')) {
         event.preventDefault();
         content.textContent = textBefore.slice(0, -1);
-        const paragraph = createBlock('paragraph', {
-          indent: block.dataset.indent
-        });
+        const paragraph = createBlock('paragraph');
         insertAfter(block, paragraph);
         focusAtStart(getContentElement(paragraph));
         emitChange();
@@ -538,7 +622,27 @@
       }
 
       event.preventDefault();
-      document.execCommand('insertText', false, '\n');
+      insertTextAtSelection('\n');
+      emitChange();
+      return true;
+    }
+
+    function handleQuoteEnter(event, block, content, range) {
+      const before = document.createRange();
+      before.selectNodeContents(content);
+      before.setEnd(range.startContainer, range.startOffset);
+      const textBefore = before.toString();
+      if (range.collapsed && isCaretAtEnd(content, range) && textBefore.endsWith('\n')) {
+        event.preventDefault();
+        content.textContent = textBefore.slice(0, -1);
+        const paragraph = createBlock('paragraph');
+        insertAfter(block, paragraph);
+        focusAtStart(getContentElement(paragraph));
+        emitChange();
+        return true;
+      }
+      event.preventDefault();
+      insertTextAtSelection('\n');
       emitChange();
       return true;
     }
@@ -555,7 +659,7 @@
       if (!content) {
         if (block.dataset.type === 'divider') {
           event.preventDefault();
-          const paragraph = createBlock('paragraph', { indent: block.dataset.indent });
+          const paragraph = createBlock('paragraph');
           insertAfter(block, paragraph);
           focusAtStart(getContentElement(paragraph));
           emitChange();
@@ -590,13 +694,19 @@
         return handleCodeEnter(event, block, content, range);
       }
 
+      if (block.dataset.type === 'quote') {
+        return handleQuoteEnter(event, block, content, range);
+      }
+
       const empty = isContentEmpty(content);
       if (empty) {
-        const indent = clampIndent(block.dataset.indent);
+        if (['bulleted-list', 'numbered-list', 'checklist', 'heading-1', 'heading-2', 'heading-3'].includes(block.dataset.type)) {
+          event.preventDefault();
+          replaceBlockWithParagraph(block);
+          return true;
+        }
 
-        // An empty nested block exits one indentation level at a time.
-        // Inside a toggle, the following Enter exits the toggle itself.
-        if (indent > 0) {
+        if (block.parentElement?.classList.contains('block-children')) {
           event.preventDefault();
           outdentBlock(block);
           focusAtStart(content);
@@ -608,11 +718,6 @@
           return true;
         }
 
-        if (['bulleted-list', 'numbered-list', 'checklist', 'quote', 'heading-1', 'heading-2', 'heading-3'].includes(block.dataset.type)) {
-          event.preventDefault();
-          replaceBlockWithParagraph(block);
-          return true;
-        }
       }
 
       event.preventDefault();
@@ -621,7 +726,16 @@
     }
 
     function insertTextAtSelection(text) {
-      document.execCommand('insertText', false, text);
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      const node = document.createTextNode(text);
+      range.insertNode(node);
+      range.setStartAfter(node);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
     }
 
     function handleTab(event) {
@@ -634,20 +748,31 @@
       event.preventDefault();
 
       if (block.dataset.type === 'code') {
-        if (event.shiftKey) {
+        const range = selection.getRangeAt(0);
+        if (!event.shiftKey && range.collapsed) insertTextAtSelection('  ');
+        else {
           const content = getContentElement(block);
-          const range = selection.getRangeAt(0);
-          const beforeRange = document.createRange();
-          beforeRange.selectNodeContents(content);
-          beforeRange.setEnd(range.startContainer, range.startOffset);
-          const before = beforeRange.toString();
-
-          if (before.endsWith('  ')) {
-            range.setStart(range.startContainer, Math.max(0, range.startOffset - 2));
-            range.deleteContents();
-          }
-        } else {
-          insertTextAtSelection('  ');
+          const full = content.textContent || '';
+          const startRange = document.createRange();
+          startRange.selectNodeContents(content);
+          startRange.setEnd(range.startContainer, range.startOffset);
+          const endRange = document.createRange();
+          endRange.selectNodeContents(content);
+          endRange.setEnd(range.endContainer, range.endOffset);
+          const start = startRange.toString().length;
+          const end = endRange.toString().length;
+          const firstLine = full.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+          const lineEnd = full.indexOf('\n', end);
+          const sliceEnd = lineEnd < 0 ? full.length : lineEnd;
+          const lines = full.slice(firstLine, sliceEnd).split('\n');
+          const replacement = lines.map((line) => event.shiftKey ? line.replace(/^ {1,2}/, '') : `  ${line}`).join('\n');
+          content.textContent = full.slice(0, firstLine) + replacement + full.slice(sliceEnd);
+          const textNode = content.firstChild || content.appendChild(document.createTextNode(''));
+          const nextRange = document.createRange();
+          nextRange.setStart(textNode, firstLine);
+          nextRange.setEnd(textNode, firstLine + replacement.length);
+          selection.removeAllRanges();
+          selection.addRange(nextRange);
         }
         emitChange();
         return true;
@@ -655,10 +780,16 @@
 
       const selectedBlocks = getSelectedBlocks(block);
       suppressChange = true;
-      selectedBlocks.forEach((selectedBlock) => {
-        const indent = clampIndent(selectedBlock.dataset.indent) + (event.shiftKey ? -1 : 1);
-        setBlockIndent(selectedBlock, indent);
-      });
+      if (event.shiftKey) {
+        selectedBlocks.forEach(outdentBlock);
+      } else {
+        const first = selectedBlocks[0];
+        const previous = first?.previousElementSibling;
+        if (previous?.classList.contains('block')) {
+          const container = getChildContainer(previous);
+          selectedBlocks.filter((item) => item.parentElement === first.parentElement).forEach((item) => container.append(item));
+        }
+      }
       suppressChange = false;
       emitChange();
 
@@ -682,8 +813,7 @@
         return true;
       }
 
-      const indent = clampIndent(block.dataset.indent);
-      if (indent > 0) {
+      if (block.parentElement?.closest('.block')) {
         event.preventDefault();
         outdentBlock(block);
         focusAtStart(content);
@@ -741,7 +871,9 @@
     }
 
     function getPlainText(content) {
-      return (content?.textContent || '').replace(/\u200B/g, '');
+      return (content?.textContent || '')
+        .replace(/\u200B/g, '')
+        .replace(/\u00A0/g, ' ');
     }
 
     function clearContent(content) {
@@ -786,7 +918,7 @@
       ];
 
       if (isToggleTitle) {
-        const headingMatch = headingPrefixes.find(([prefix]) => text.startsWith(prefix));
+        const headingMatch = headingPrefixes.find(([prefix]) => text === prefix);
         if (!headingMatch) return false;
 
         removeLeadingCharacters(content, headingMatch[0].length);
@@ -797,7 +929,7 @@
       }
 
       // Also supports pasted or pre-existing content such as "> # Heading".
-      const compoundToggle = text.match(/^>\s(#{1,3})\s/);
+      const compoundToggle = text.match(/^>\s(#{1,3})\s$/);
       if (compoundToggle) {
         const prefixLength = compoundToggle[0].length;
         const titleStyle = `heading-${compoundToggle[1].length}`;
@@ -820,13 +952,10 @@
         ['> ', 'toggle']
       ];
 
-      const mapping = mappings.find(([prefix]) => text.startsWith(prefix));
+      const mapping = mappings.find(([prefix]) => text === prefix);
       if (!mapping) return false;
 
       const [prefix, targetType] = mapping;
-      const remainingText = text.slice(prefix.length);
-      if (targetType === 'divider' && remainingText.trim()) return false;
-
       const sourceType = block.dataset.type;
       removeLeadingCharacters(content, prefix.length);
 
@@ -837,7 +966,7 @@
 
       const transformed = transformBlock(block, targetType, transformOptions);
       if (targetType === 'divider') {
-        const paragraph = createBlock('paragraph', { indent: transformed.dataset.indent });
+        const paragraph = createBlock('paragraph');
         insertAfter(transformed, paragraph);
         focusAtStart(getContentElement(paragraph));
       } else {
@@ -901,7 +1030,7 @@
 
       const normalizedTarget = normalizeType(targetType);
       const sourceType = block.dataset.type;
-      const indent = block.dataset.indent;
+      const sourceChildren = [...(getChildContainer(block)?.children || [])];
 
       if (sourceType === normalizedTarget && normalizedTarget !== 'toggle') {
         return block;
@@ -910,8 +1039,7 @@
       if (sourceType === 'toggle') {
         const title = getContentElement(block);
         const titleHtml = title?.innerHTML || '<br>';
-        const body = getToggleBody(block);
-        const children = [...(body?.children || [])];
+        const children = sourceChildren;
 
         if (normalizedTarget === 'toggle') {
           if (options.titleStyle) title.dataset.titleStyle = options.titleStyle;
@@ -920,8 +1048,8 @@
         }
 
         const replacement = createBlock(normalizedTarget, {
-          indent,
-          html: titleHtml
+          html: titleHtml,
+          children: []
         });
         block.replaceWith(replacement);
 
@@ -945,10 +1073,10 @@
         const titleStyle = options.titleStyle
           || (sourceType.startsWith('heading-') ? sourceType : 'paragraph');
         const toggle = createBlock('toggle', {
-          indent,
           html: sourceHtml,
           titleStyle,
-          open: true
+          open: true,
+          children: sourceChildren
         });
         block.replaceWith(toggle);
         refreshNumberedMarkers();
@@ -957,10 +1085,10 @@
       }
 
       const replacement = createBlock(normalizedTarget, {
-        indent,
         html: sourceHtml,
         text: sourceType === 'code' ? sourceContent?.textContent || '' : undefined,
-        checked: normalizedTarget === 'checklist' ? false : undefined
+        checked: normalizedTarget === 'checklist' ? false : undefined,
+        children: sourceChildren
       });
 
       block.replaceWith(replacement);
@@ -981,7 +1109,6 @@
     function insertBlock(type, referenceBlock = null, options = {}) {
       const reference = referenceBlock || activeMenuBlock || ensureCaretBlock();
       const block = createBlock(type, {
-        indent: reference?.dataset.indent || 0,
         ...options
       });
       insertAfter(reference, block);
@@ -1063,15 +1190,18 @@
       const target = block || activeMenuBlock || getCurrentBlock();
       if (!target) return;
 
+      const selected = getSelectedBlocks(target).filter((item) => item.parentElement === target.parentElement);
+      const targets = selected.length ? selected : [target];
+
       if (direction === 'up') {
-        const previous = target.previousElementSibling;
+        const previous = targets[0].previousElementSibling;
         if (previous?.classList.contains('block')) {
-          previous.insertAdjacentElement('beforebegin', target);
+          targets.forEach((item) => previous.insertAdjacentElement('beforebegin', item));
         }
       } else {
-        const next = target.nextElementSibling;
+        const next = targets[targets.length - 1].nextElementSibling;
         if (next?.classList.contains('block')) {
-          next.insertAdjacentElement('afterend', target);
+          [...targets].reverse().forEach((item) => next.insertAdjacentElement('afterend', item));
         }
       }
 
@@ -1086,10 +1216,12 @@
       if (command.startsWith('transform:')) {
         removeSlashQuery(target);
         const targetType = command.slice('transform:'.length);
-        const transformed = transformBlock(target, targetType);
+        const selected = getSelectedBlocks(target);
+        const transformedBlocks = selected.map((item) => transformBlock(item, targetType));
+        const transformed = transformedBlocks[0];
 
         if (targetType === 'divider') {
-          const paragraph = createBlock('paragraph', { indent: transformed.dataset.indent });
+          const paragraph = createBlock('paragraph');
           insertAfter(transformed, paragraph);
           focusAtStart(getContentElement(paragraph));
           emitChange();
@@ -1101,7 +1233,7 @@
         const targetType = command.slice('insert:'.length);
         const inserted = insertBlock(targetType, target);
         if (targetType === 'divider') {
-          const paragraph = createBlock('paragraph', { indent: inserted.dataset.indent });
+          const paragraph = createBlock('paragraph');
           insertAfter(inserted, paragraph);
           focusAtStart(getContentElement(paragraph));
           emitChange();
@@ -1125,29 +1257,19 @@
 
     function refreshNumberedMarkers(container = root) {
       const children = [...container.children].filter((child) => child.classList?.contains('block'));
-      const counters = new Map();
+      let counter = 0;
 
       children.forEach((block) => {
         const type = block.dataset.type;
-        const indent = clampIndent(block.dataset.indent);
-
         if (type === 'numbered-list') {
-          const key = String(indent);
-          const previous = counters.get(key) || 0;
-          const next = previous + 1;
-          counters.set(key, next);
+          counter += 1;
           const marker = block.querySelector(':scope > .block-main > .block-row > .list-marker');
-          if (marker) marker.textContent = `${next}.`;
+          if (marker) marker.textContent = `${counter}.`;
         } else {
-          [...counters.keys()]
-            .filter((key) => Number(key) >= indent)
-            .forEach((key) => counters.delete(key));
+          counter = 0;
         }
-
-        if (type === 'toggle') {
-          const body = getToggleBody(block);
-          if (body) refreshNumberedMarkers(body);
-        }
+        const childContainer = getChildContainer(block);
+        if (childContainer) refreshNumberedMarkers(childContainer);
       });
     }
 
@@ -1282,42 +1404,10 @@
       if (!selectionInsideRoot(selection)) return;
 
       const text = event.clipboardData?.getData('text/plain') || '';
-      const clipboardHtml = event.clipboardData?.getData('text/html') || '';
-      if (!text && !clipboardHtml) return;
+      if (!text) return;
       URL_PATTERN.lastIndex = 0;
 
       event.preventDefault();
-
-      // Clipboard HTML is never inserted directly. Keeping only the supported
-      // inline vocabulary removes images, embeds, tracking pixels and office markup.
-      if (clipboardHtml && /<(?:p|div|h[1-3]|blockquote|pre|ul|ol|hr|details)\b/i.test(clipboardHtml)) {
-        const template = document.createElement('template');
-        template.innerHTML = clipboardHtml;
-        template.content.querySelectorAll(
-          'img,picture,source,video,audio,iframe,object,embed,script,style,svg,canvas,form'
-        ).forEach((element) => element.remove());
-        const pastedBlocks = [];
-        [...template.content.childNodes].forEach((node) => pastedBlocks.push(...migrateNode(node)));
-        const block = getBlockFromNode(selection.anchorNode);
-        if (block && pastedBlocks.length) {
-          pastedBlocks.forEach((newBlock) => insertBefore(block, newBlock));
-          if (isContentEmpty(getContentElement(block))) block.remove();
-          focusAtEnd(getContentElement(pastedBlocks[pastedBlocks.length - 1]));
-          emitChange();
-          return;
-        }
-      }
-
-      if (clipboardHtml && !/[\r\n]/.test(text)) {
-        const sanitized = window.NoteStorage.sanitizeInlineHtml(clipboardHtml);
-        if (sanitized) {
-          const template = document.createElement('template');
-          template.innerHTML = sanitized;
-          insertFragmentAtSelection(template.content);
-          emitChange();
-          return;
-        }
-      }
 
       if (text.includes('\n')) {
         const block = getBlockFromNode(selection.anchorNode);
@@ -1428,12 +1518,12 @@
 
     function deserializeBlockData(data) {
       const type = normalizeType(data?.type);
-      const children = type === 'toggle' && Array.isArray(data?.children)
+      const children = Array.isArray(data?.children)
         ? data.children.map(deserializeBlockData)
         : [];
 
       return createBlock(type, {
-        indent: data?.indent || 0,
+        id: data?.id,
         html: data?.html || '<br>',
         text: data?.text || '',
         checked: data?.checked === true,
@@ -1445,17 +1535,22 @@
 
     function serializeBlockData(block) {
       const type = normalizeType(block?.dataset.type);
-      const indent = clampIndent(block?.dataset.indent);
-      const result = { type };
+      const result = { type, id: block.dataset.blockId };
 
-      if (indent > 0) result.indent = indent;
+      const children = [...(getChildContainer(block)?.children || [])]
+        .filter((child) => child.classList?.contains('block'))
+        .map(serializeBlockData);
 
-      if (type === 'divider') return result;
+      if (type === 'divider') {
+        if (children.length) result.children = children;
+        return result;
+      }
 
       const content = getContentElement(block);
       if (type === 'code') {
         const text = content?.textContent || '';
         if (text) result.text = text;
+        if (children.length) result.children = children;
         return result;
       }
 
@@ -1471,12 +1566,9 @@
         if (titleStyle !== 'paragraph') result.titleStyle = titleStyle;
         if (block.dataset.open === 'false') result.open = false;
 
-        const body = getToggleBody(block);
-        const children = [...(body?.children || [])]
-          .filter((child) => child.classList?.contains('block'))
-          .map(serializeBlockData);
-        if (children.length) result.children = children;
       }
+
+      if (children.length) result.children = children;
 
       return result;
     }
@@ -1487,7 +1579,7 @@
       if (existingTopBlocks.length === root.children.length && existingTopBlocks.length > 0) {
         root.querySelectorAll('.block').forEach((block) => {
           block.dataset.type = normalizeType(block.dataset.type);
-          block.dataset.indent = String(clampIndent(block.dataset.indent));
+          delete block.dataset.indent;
           block.dataset.blockId = block.dataset.blockId || nextBlockId();
           block.draggable = false;
           block.classList.remove('dragging', 'drag-target-before', 'drag-target-after');
@@ -1518,13 +1610,27 @@
       });
     }
 
-    function load(value = '') {
+    function load(value = '', options = {}) {
       suppressChange = true;
       try {
         root.replaceChildren();
 
         if (Array.isArray(value)) {
-          value.forEach((blockData) => root.append(deserializeBlockData(blockData)));
+          const containers = [root];
+          let previousBlock = null;
+          let previousDepth = 0;
+          value.forEach((blockData) => {
+            const requestedDepth = Math.max(0, Number.parseInt(blockData?.indent, 10) || 0);
+            const depth = previousBlock ? Math.min(requestedDepth, previousDepth + 1) : 0;
+            if (depth > previousDepth && previousBlock) {
+              containers[depth] = getChildContainer(previousBlock);
+            }
+            containers.length = depth + 1;
+            const block = deserializeBlockData(blockData);
+            (containers[depth] || root).append(block);
+            previousBlock = block;
+            previousDepth = depth;
+          });
         } else {
           root.innerHTML = typeof value === 'string' ? value : '';
           normalizeLoadedBlocks();
@@ -1535,6 +1641,10 @@
         updateEmptyState();
       } finally {
         suppressChange = false;
+      }
+      if (!options.preserveHistory) {
+        historyEntries = [{ data: JSON.stringify(serialize()), blockId: '', offset: 0 }];
+        historyIndex = 0;
       }
     }
 
@@ -1553,6 +1663,7 @@
     }
 
     root.addEventListener('keydown', (event) => {
+      if (handleHistoryShortcut(event)) return;
       if (handleSelectAll(event)) return;
       if (handleDeleteWholeNote(event)) return;
       if (event.key === 'Enter' && handleEnter(event)) return;
@@ -1560,9 +1671,20 @@
       if (event.key === 'Backspace' && handleBackspace(event)) return;
     }, { capture: true, signal });
 
+    root.addEventListener('beforeinput', (event) => {
+      if (event.inputType !== 'historyUndo' && event.inputType !== 'historyRedo') return;
+      event.preventDefault();
+      restoreHistory(historyIndex + (event.inputType === 'historyRedo' ? 1 : -1));
+    }, { signal });
+
     root.addEventListener('input', (event) => {
-      const block = getBlockFromNode(event.target);
-      const content = event.target.closest?.('[data-block-content]');
+      const selection = window.getSelection();
+      const anchorElement = selection?.anchorNode?.nodeType === Node.ELEMENT_NODE
+        ? selection.anchorNode
+        : selection?.anchorNode?.parentElement;
+      const content = anchorElement?.closest?.('[data-block-content]')
+        || event.target.closest?.('[data-block-content]');
+      const block = getBlockFromNode(content || anchorElement || event.target);
       if (!block || !content) {
         ensureRootHasBlock();
         emitChange();
@@ -1571,7 +1693,7 @@
 
       const text = getPlainText(content);
 
-      if (block.dataset.type === 'code') {
+      if (block.dataset.type === 'code' || block.dataset.type === 'quote') {
         onCloseMenu();
         emitChange();
         return;
@@ -1642,19 +1764,20 @@
 
       if (handle) {
         const block = handle.closest('.block');
-        block.draggable = true;
         block.setAttribute('aria-grabbed', 'true');
         armedDragBlock = block;
       }
     }, { capture: true, signal });
 
     root.addEventListener('dragstart', (event) => {
-      const block = event.target.closest?.('.block');
-      if (!armedDragBlock || block !== armedDragBlock) {
+      const handle = event.target.closest?.('[data-drag-handle]');
+      const block = handle?.closest('.block');
+      if (!block) {
         event.preventDefault();
         return;
       }
 
+      armedDragBlock = block;
       draggedBlock = block;
       draggedBlock.classList.add('dragging');
       event.dataTransfer.effectAllowed = 'move';
@@ -1694,7 +1817,6 @@
     const disarmDrag = () => {
       clearDragIndicators();
       if (armedDragBlock) {
-        armedDragBlock.draggable = false;
         armedDragBlock.removeAttribute('aria-grabbed');
       }
       if (draggedBlock) draggedBlock.classList.remove('dragging');
