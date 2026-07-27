@@ -72,6 +72,7 @@
       handle.contentEditable = 'false';
       handle.setAttribute('data-drag-handle', 'true');
       handle.setAttribute('aria-label', 'Block actions');
+      handle.draggable = false;
       handle.draggable = true;
       handle.textContent = '⋮⋮';
       return handle;
@@ -257,6 +258,9 @@
       }
       const range = selection.getRangeAt(0);
       const blocks = [...root.querySelectorAll('.block')].filter((block) => {
+        const ownContent = getContentElement(block)
+          || block.querySelector(':scope > .block-main > .block-divider');
+        if (!ownContent) return false;
         try {
           return range.intersectsNode(ownContent);
         } catch {
@@ -387,6 +391,74 @@
       refreshNumberedMarkers();
       recordHistory();
       onChange(serialize());
+    }
+
+    function recordHistory() {
+      if (applyingHistory) return;
+      const data = JSON.stringify(serialize());
+      if (historyEntries[historyIndex]?.data === data) return;
+      const block = getCurrentBlock();
+      const content = getContentElement(block);
+      const selection = window.getSelection();
+      let offset = 0;
+      if (content && selectionInsideRoot(selection)) {
+        const before = document.createRange();
+        before.selectNodeContents(content);
+        try {
+          before.setEnd(selection.anchorNode, selection.anchorOffset);
+          offset = before.toString().length;
+        } catch {
+          offset = 0;
+        }
+      }
+      const snapshot = { data, blockId: block?.dataset.blockId || '', offset };
+      historyEntries = historyEntries.slice(0, historyIndex + 1);
+      historyEntries.push(snapshot);
+      if (historyEntries.length > 200) historyEntries.shift();
+      historyIndex = historyEntries.length - 1;
+    }
+
+    function restoreHistory(nextIndex) {
+      if (nextIndex < 0 || nextIndex >= historyEntries.length || nextIndex === historyIndex) return false;
+      applyingHistory = true;
+      try {
+        historyIndex = nextIndex;
+        const snapshot = historyEntries[historyIndex];
+        load(JSON.parse(snapshot.data), { preserveHistory: true });
+        const escapedId = window.CSS?.escape ? window.CSS.escape(snapshot.blockId) : snapshot.blockId.replace(/[^a-zA-Z0-9_-]/g, '');
+        const block = root.querySelector(`[data-block-id="${escapedId}"]`) || root.querySelector('.block');
+        const content = getContentElement(block);
+        const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+        let remaining = snapshot.offset;
+        let node = null;
+        while (walker.nextNode()) {
+          node = walker.currentNode;
+          if (remaining <= node.textContent.length) break;
+          remaining -= node.textContent.length;
+        }
+        if (node) {
+          const range = document.createRange();
+          range.setStart(node, Math.min(remaining, node.textContent.length));
+          range.collapse(true);
+          const selection = window.getSelection();
+          selection.removeAllRanges();
+          selection.addRange(range);
+          content.focus();
+        } else {
+          focusAtEnd(content);
+        }
+      } finally {
+        applyingHistory = false;
+      }
+      onChange(serialize());
+      return true;
+    }
+
+    function handleHistoryShortcut(event) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'z') return false;
+      event.preventDefault();
+      restoreHistory(historyIndex + (event.shiftKey ? 1 : -1));
+      return true;
     }
 
     function recordHistory() {
@@ -713,6 +785,14 @@
         emitChange();
         return true;
       }
+
+      const empty = isContentEmpty(content);
+      if (empty) {
+        if (['bulleted-list', 'numbered-list', 'checklist', 'quote', 'code', 'heading-1', 'heading-2', 'heading-3'].includes(block.dataset.type)) {
+          event.preventDefault();
+          replaceBlockWithParagraph(block);
+          return true;
+        }
 
       if (block.dataset.type === 'code') {
         return handleCodeEnter(event, block, content, range);
@@ -1807,6 +1887,16 @@
       }
     }, { capture: true, signal });
 
+    root.addEventListener('pointermove', (event) => {
+      if (!armedDragBlock || event.pointerId !== dragPointerId) return;
+      if (!draggedBlock && Math.hypot(event.clientX - dragStartX, event.clientY - dragStartY) < 5) return;
+      event.preventDefault();
+      if (!draggedBlock) {
+        draggedBlock = armedDragBlock;
+        draggedBlock.classList.add('dragging');
+        suppressHandleClick = true;
+      }
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('.block');
     root.addEventListener('dragstart', (event) => {
       const handle = event.target.closest?.('[data-drag-handle]');
       const block = handle?.closest('.block');
