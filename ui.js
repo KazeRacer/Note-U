@@ -454,6 +454,10 @@
         const suggested = /^https?:\/\//i.test(selectedText) ? selectedText : 'https://';
         const url = window.prompt('Link URL', suggested);
         if (!url) return;
+        if (!/^(https?:|mailto:|tel:)/i.test(url.trim())) {
+          showToast('Use an http, https, mailto or tel link');
+          return;
+        }
         document.execCommand('createLink', false, url);
 
         editorRoot.querySelectorAll('a').forEach((anchor) => {
