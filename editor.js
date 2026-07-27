@@ -36,6 +36,10 @@
     let draggedBlock = null;
     let dragTargetBlock = null;
     let dragTargetPosition = null;
+    let dragPointerId = null;
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let suppressHandleClick = false;
     let suppressChange = false;
     let blockCounter = 0;
     let historyEntries = [];
@@ -254,7 +258,7 @@
       const range = selection.getRangeAt(0);
       const blocks = [...root.querySelectorAll('.block')].filter((block) => {
         try {
-          return range.intersectsNode(block);
+          return range.intersectsNode(ownContent);
         } catch {
           return false;
         }
@@ -554,7 +558,7 @@
       normalizeEmptyContent(content);
 
       const currentType = block.dataset.type;
-      const nextType = ['heading-1', 'heading-2', 'heading-3', 'quote'].includes(currentType)
+      const nextType = ['heading-1', 'heading-2', 'heading-3'].includes(currentType)
         ? 'paragraph'
         : currentType;
 
@@ -688,7 +692,7 @@
         return false;
       }
 
-      if (event.shiftKey && block.dataset.type !== 'code') {
+      if (event.shiftKey) {
         event.preventDefault();
         document.execCommand('insertLineBreak', false);
         emitChange();
@@ -971,6 +975,9 @@
 
       const [prefix, targetType] = mapping;
       const sourceType = block.dataset.type;
+      const previousQuote = sourceType === 'quote' && block.previousElementSibling?.dataset.type === 'quote'
+        ? block.previousElementSibling
+        : null;
       removeLeadingCharacters(content, prefix.length);
 
       const transformOptions = {};
@@ -978,7 +985,15 @@
         transformOptions.titleStyle = sourceType;
       }
 
+      if (previousQuote) suppressChange = true;
       const transformed = transformBlock(block, targetType, transformOptions);
+      if (previousQuote && targetType !== 'divider') {
+        getChildContainer(previousQuote).append(transformed);
+        suppressChange = false;
+        emitChange();
+      } else if (previousQuote) {
+        suppressChange = false;
+      }
       if (targetType === 'divider') {
         const paragraph = createBlock('paragraph');
         insertAfter(transformed, paragraph);
@@ -1742,6 +1757,10 @@
       const handle = event.target.closest?.('[data-drag-handle]');
       if (handle) {
         event.preventDefault();
+        if (suppressHandleClick) {
+          suppressHandleClick = false;
+          return;
+        }
         const block = handle.closest('.block');
         activeMenuBlock = block;
         saveSelection();
@@ -1777,9 +1796,14 @@
       armedDragBlock = null;
 
       if (handle) {
+        event.preventDefault();
         const block = handle.closest('.block');
         block.setAttribute('aria-grabbed', 'true');
         armedDragBlock = block;
+        dragPointerId = event.pointerId;
+        dragStartX = event.clientX;
+        dragStartY = event.clientY;
+        handle.setPointerCapture?.(event.pointerId);
       }
     }, { capture: true, signal });
 
@@ -1802,8 +1826,6 @@
       if (!draggedBlock) return;
       const target = event.target.closest?.('.block');
       if (!target || target === draggedBlock || target.contains(draggedBlock) || draggedBlock.contains(target)) return;
-
-      event.preventDefault();
       clearDragIndicators();
 
       const rect = target.getBoundingClientRect();
@@ -1811,21 +1833,6 @@
       target.classList.add(position === 'before' ? 'drag-target-before' : 'drag-target-after');
       dragTargetBlock = target;
       dragTargetPosition = position;
-    }, { signal });
-
-    root.addEventListener('drop', (event) => {
-      if (!draggedBlock || !dragTargetBlock) return;
-      event.preventDefault();
-
-      if (dragTargetPosition === 'before') {
-        dragTargetBlock.insertAdjacentElement('beforebegin', draggedBlock);
-      } else {
-        dragTargetBlock.insertAdjacentElement('afterend', draggedBlock);
-      }
-
-      clearDragIndicators();
-      refreshNumberedMarkers();
-      emitChange();
     }, { signal });
 
     const disarmDrag = () => {
@@ -1836,13 +1843,26 @@
       if (draggedBlock) draggedBlock.classList.remove('dragging');
       armedDragBlock = null;
       draggedBlock = null;
+      dragPointerId = null;
     };
 
-    root.addEventListener('dragend', disarmDrag, { signal });
-    root.addEventListener('pointerup', () => {
-      if (!draggedBlock) disarmDrag();
+    root.addEventListener('pointerup', (event) => {
+      if (event.pointerId !== dragPointerId) return;
+      if (draggedBlock && dragTargetBlock) {
+        if (dragTargetPosition === 'before') {
+          dragTargetBlock.insertAdjacentElement('beforebegin', draggedBlock);
+        } else {
+          dragTargetBlock.insertAdjacentElement('afterend', draggedBlock);
+        }
+        refreshNumberedMarkers();
+        emitChange();
+      }
+      disarmDrag();
     }, { signal });
-    root.addEventListener('pointercancel', disarmDrag, { signal });
+    root.addEventListener('pointercancel', () => {
+      disarmDrag();
+      suppressHandleClick = false;
+    }, { signal });
 
     document.addEventListener('selectionchange', () => {
       const selection = window.getSelection();
