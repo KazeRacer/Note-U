@@ -21,3 +21,20 @@ Run the automated URL-format checks with:
 ```sh
 npm test
 ```
+
+Run JavaScript syntax checks with `npm run check`. The complete repeatable browser
+acceptance procedure is in [`tests/MANUAL_TEST_PLAN.md`](tests/MANUAL_TEST_PLAN.md).
+
+## Editor architecture
+
+The editor renders the same hierarchical block tree that `storage.js` serializes.
+Every block owns an ordered child container (the toggle body is the toggle's child
+container), so Tab and Shift+Tab move subtrees instead of changing a visual indent
+number. Legacy flat blocks with indent metadata are converted into this tree only
+at the load boundary. Pasted multiline plain text becomes one paragraph per line;
+clipboard HTML is never inserted.
+
+Enter after a non-empty heading creates a paragraph. Lists, checklists, quotes and
+code continue as the same block type on the first Enter; Enter on the resulting
+empty continuation converts it to a paragraph in the same parent. Ctrl+A/Cmd+A
+first selects the current block content and the next press selects the complete editor.

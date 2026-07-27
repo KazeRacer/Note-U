@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const CURRENT_VERSION = 5;
+  const CURRENT_VERSION = 6;
   const DEFAULT_NOTE = Object.freeze({
     version: CURRENT_VERSION,
     title: 'Note',
@@ -115,7 +115,7 @@
         }
 
         if (name === 'href') {
-          const safeProtocol = /^(https?:|mailto:|tel:|#)/i.test(value);
+          const safeProtocol = /^(https?:|mailto:|tel:)/i.test(value);
           if (!safeProtocol) element.removeAttribute(attribute.name);
         }
       });
@@ -327,6 +327,18 @@
   function sanitizeInlineHtml(html) {
     if (typeof html !== 'string' || !html.trim()) return '';
 
+    if (typeof document === 'undefined') {
+      return html
+        .replace(/<(?:img|picture|source|video|audio|iframe|object|embed|script|style|link|meta|svg|math|canvas|form|input)\b[^>]*>(?:[\s\S]*?<\/[^>]+>)?/gi, '')
+        .replace(/<(?!\/?(?:a|br|strong|b|em|i|s|strike|mark|code|span)\b)[^>]+>/gi, '')
+        .replace(/<(?!a\b)([a-z]+)\b[^>]*>/gi, '<$1>')
+        .replace(/<a\b[^>]*href=(['"])(.*?)\1[^>]*>/gi, (match, quote, href) => (
+          /^(https?:|mailto:|tel:)/i.test(href)
+            ? `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">`
+            : '<a>'
+        ));
+    }
+
     const template = document.createElement('template');
     template.innerHTML = html;
 
@@ -358,7 +370,7 @@
 
       if (element.tagName === 'A') {
         const href = element.getAttribute('href') || '';
-        if (!/^(https?:|mailto:|tel:|#)/i.test(href)) {
+        if (!/^(https?:|mailto:|tel:)/i.test(href)) {
           element.removeAttribute('href');
         } else {
           element.setAttribute('target', '_blank');
@@ -399,9 +411,12 @@
       0,
       Math.min(8, Number.parseInt(block.indent ?? block.depth ?? block.level ?? block.i ?? 0, 10) || 0)
     );
+    const id = typeof (block.id ?? block.k) === 'string' ? (block.id ?? block.k) : undefined;
+    const rawChildren = block.children ?? block.blocks ?? block.body ?? block.b ?? [];
+    const children = normalizeBlocks(Array.isArray(rawChildren) ? rawChildren : []);
 
     if (type === 'divider') {
-      return { type, indent };
+      return { type, indent, ...(id ? { id } : {}), ...(children.length ? { children } : {}) };
     }
 
     if (type === 'code') {
@@ -409,13 +424,12 @@
       const text = Array.isArray(value)
         ? value.map((segment) => segment?.text ?? segment?.value ?? segment?.content ?? '').join('')
         : String(value ?? '');
-      return { type, indent, text };
+      return { type, indent, text, ...(id ? { id } : {}), ...(children.length ? { children } : {}) };
     }
 
     if (type === 'toggle') {
       const rawTitleStyle = block.titleStyle ?? block.s ?? 'paragraph';
       const titleStyle = CODE_BLOCK_TYPES[rawTitleStyle] || mapLegacyBlockType(rawTitleStyle);
-      const rawChildren = block.children ?? block.blocks ?? block.body ?? block.b ?? [];
       const rawTitle = block.title
         ?? block.titleSegments
         ?? block.summary
@@ -428,6 +442,7 @@
       return {
         type,
         indent,
+        ...(id ? { id } : {}),
         html: sanitizeInlineHtml(
           typeof rawTitle === 'string' ? rawTitle : richTextToHtml(rawTitle)
         ),
@@ -435,7 +450,7 @@
           ? titleStyle
           : 'paragraph',
         open: block.open !== false && block.o !== 0,
-        children: normalizeBlocks(Array.isArray(rawChildren) ? rawChildren : [])
+        children
       };
     }
 
@@ -447,7 +462,9 @@
     return {
       type,
       indent,
+      ...(id ? { id } : {}),
       html,
+      ...(children.length ? { children } : {}),
       ...(type === 'checklist'
         ? { checked: Boolean(block.checked ?? block.done ?? block.completed ?? block.x) }
         : {})
@@ -463,12 +480,18 @@
     const normalized = normalizeBlock(block);
     const compact = { t: BLOCK_TYPE_CODES[normalized.type] || 'p' };
 
+    if (normalized.id) compact.k = normalized.id;
+
     if (normalized.indent > 0) compact.i = normalized.indent;
 
-    if (normalized.type === 'divider') return compact;
+    if (normalized.type === 'divider') {
+      if (normalized.children?.length) compact.b = normalized.children.map(compactBlock);
+      return compact;
+    }
 
     if (normalized.type === 'code') {
       if (normalized.text) compact.v = normalized.text;
+      if (normalized.children?.length) compact.b = normalized.children.map(compactBlock);
       return compact;
     }
 
@@ -483,8 +506,9 @@
         compact.s = BLOCK_TYPE_CODES[normalized.titleStyle] || 'p';
       }
       if (normalized.open === false) compact.o = 0;
-      if (normalized.children?.length) compact.b = normalized.children.map(compactBlock);
     }
+
+    if (normalized.children?.length) compact.b = normalized.children.map(compactBlock);
 
     return compact;
   }
