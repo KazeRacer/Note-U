@@ -38,4 +38,6 @@ test('continuation blocks share one empty-Enter exit rule', () => {
 test('multi-block transforms use each selected block content instead of ancestors', () => {
   assert.match(editor, /range\.intersectsNode\(ownContent\)/);
   assert.match(editor, /selected\.map\(\(item\) => transformBlock\(item, targetType\)\)/);
+  assert.match(editor, /handle\.draggable = true/);
+  assert.match(editor, /event\.target\.closest\?\.\('\[data-drag-handle\]'\)/);
 });

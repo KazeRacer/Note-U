@@ -52,3 +52,7 @@ application version. Accepting the `main` side for conflicts in `editor.js`,
 Runtime assets include the application version in their URL. This cache-busting
 query ensures GitHub Pages and the browser request the files from the merged
 release rather than reusing an older editor script.
+Enter after a non-empty heading creates a paragraph. Quote and code Enter inserts a
+line, and a second Enter at the final empty line exits to a paragraph. Ctrl+A/Cmd+A
+first selects the current block content and the next press selects the complete
+editor.
