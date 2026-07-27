@@ -354,6 +354,14 @@
       restoringHistory = false;
       focus(contentOf(root.querySelector('.block')), true);
       onChange(serialize());
+      return true;
+    }
+
+    function handleHistoryShortcut(event) {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'z') return false;
+      event.preventDefault();
+      restoreHistory(historyIndex + (event.shiftKey ? 1 : -1));
+      return true;
     }
 
     function replace(block, targetType, data = {}) {
