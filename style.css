@@ -244,9 +244,7 @@ button {
 }
 
 .block-children {
-  margin-left: calc(var(--indent-step) / 2);
-  padding-left: calc(var(--indent-step) / 2);
-  border-left: 1px solid var(--border);
+  margin-left: var(--indent-step);
 }
 
 .block-children:empty {

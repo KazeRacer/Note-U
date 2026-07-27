@@ -16,8 +16,7 @@ browser, keep DevTools Console visible, and repeat the responsive checks at 375 
   blocks. Verify tree depth changes one level, order and complete subtrees survive,
   and Tab/Shift+Tab edit selected code lines rather than nesting the code block.
 - Exercise Backspace at the start and in text. Exercise Delete normally. Press
-  Ctrl+A/Cmd+A twice, delete, and verify one editable paragraph remains. Undo and
-  redo typing, transforms, nesting, dragging, deletion, and whole-note reset.
+  Ctrl+A/Cmd+A twice, delete, and verify one editable paragraph remains.
 - Drag-select partial text, multiple lines, adjacent blocks, and nested blocks.
   Use context actions for duplicate, delete, move, transform, and clear formatting
   across the selection; verify selected parents are handled only once.

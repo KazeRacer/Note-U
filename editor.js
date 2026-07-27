@@ -647,6 +647,26 @@
       return true;
     }
 
+    function handleQuoteEnter(event, block, content, range) {
+      const before = document.createRange();
+      before.selectNodeContents(content);
+      before.setEnd(range.startContainer, range.startOffset);
+      const textBefore = before.toString();
+      if (range.collapsed && isCaretAtEnd(content, range) && textBefore.endsWith('\n')) {
+        event.preventDefault();
+        content.textContent = textBefore.slice(0, -1);
+        const paragraph = createBlock('paragraph');
+        insertAfter(block, paragraph);
+        focusAtStart(getContentElement(paragraph));
+        emitChange();
+        return true;
+      }
+      event.preventDefault();
+      document.execCommand('insertText', false, '\n');
+      emitChange();
+      return true;
+    }
+
     function handleEnter(event) {
       const selection = window.getSelection();
       if (!selectionInsideRoot(selection) || selection.rangeCount === 0) return false;
@@ -700,12 +720,6 @@
 
       const empty = isContentEmpty(content);
       if (empty) {
-        if (['bulleted-list', 'numbered-list', 'checklist', 'heading-1', 'heading-2', 'heading-3'].includes(block.dataset.type)) {
-          event.preventDefault();
-          replaceBlockWithParagraph(block);
-          return true;
-        }
-
         if (block.parentElement?.classList.contains('block-children')) {
           event.preventDefault();
           outdentBlock(block);
