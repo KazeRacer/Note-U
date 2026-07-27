@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const CURRENT_VERSION = 4;
+  const CURRENT_VERSION = 5;
   const DEFAULT_NOTE = Object.freeze({
     version: CURRENT_VERSION,
     title: 'Note',
@@ -56,6 +56,14 @@
     const blockedTags = new Set([
       'SCRIPT',
       'STYLE',
+      'IMG',
+      'PICTURE',
+      'SOURCE',
+      'VIDEO',
+      'AUDIO',
+      'CANVAS',
+      'SVG',
+      'MATH',
       'IFRAME',
       'OBJECT',
       'EMBED',
@@ -101,7 +109,7 @@
           return;
         }
 
-        if (name === 'style' || name === 'id' || name === 'draggable') {
+        if (name === 'style' || name === 'id' || name === 'draggable' || name === 'src' || name === 'srcset') {
           element.removeAttribute(attribute.name);
           return;
         }
@@ -325,9 +333,17 @@
     const allowedTags = new Set([
       'A', 'BR', 'STRONG', 'B', 'EM', 'I', 'S', 'STRIKE', 'MARK', 'CODE', 'SPAN'
     ]);
+    const discardedTags = new Set([
+      'IMG', 'PICTURE', 'SOURCE', 'VIDEO', 'AUDIO', 'IFRAME', 'OBJECT', 'EMBED',
+      'SCRIPT', 'STYLE', 'LINK', 'META', 'SVG', 'MATH', 'CANVAS', 'FORM', 'INPUT'
+    ]);
     const elements = [...template.content.querySelectorAll('*')];
 
     elements.forEach((element) => {
+      if (discardedTags.has(element.tagName)) {
+        element.remove();
+        return;
+      }
       if (!allowedTags.has(element.tagName)) {
         element.replaceWith(...element.childNodes);
         return;
