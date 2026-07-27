@@ -36,7 +36,7 @@ test('current URL payloads round-trip supported block data', () => {
   };
 
   const loaded = storage.loadFromHash(`#${storage.encodeNote(note)}`);
-  assert.equal(loaded.version, 5);
+  assert.equal(loaded.version, 6);
   assert.equal(loaded.title, note.title);
   assert.equal(loaded.icon, note.icon);
   assert.equal(loaded.blocks[0].type, 'code');
@@ -65,4 +65,49 @@ test('invalid URLs safely return a fresh note', () => {
   const loaded = storage.loadFromHash('%not-a-valid-note%');
   assert.equal(loaded.title, storage.DEFAULT_NOTE.title);
   assert.deepEqual(Array.from(loaded.blocks), []);
+});
+
+test('hierarchical blocks, stable IDs, formatting and state survive a URL round trip', () => {
+  const storage = loadStorage();
+  const note = {
+    title: '',
+    icon: '🧠',
+    blocks: [{
+      id: 'parent',
+      type: 'numbered-list',
+      html: '<strong>one</strong> <a href="https://example.test/x" onclick="bad()">link</a>',
+      children: [{
+        id: 'toggle',
+        type: 'toggle',
+        html: '<mark>details</mark>',
+        titleStyle: 'heading-2',
+        open: false,
+        children: [{ id: 'task', type: 'checklist', html: 'done', checked: true }]
+      }]
+    }]
+  };
+
+  const loaded = storage.loadFromHash(storage.encodeNote(note));
+  assert.equal(loaded.title, '');
+  assert.equal(loaded.blocks[0].id, 'parent');
+  assert.equal(loaded.blocks[0].children[0].id, 'toggle');
+  assert.equal(loaded.blocks[0].children[0].open, false);
+  assert.equal(loaded.blocks[0].children[0].titleStyle, 'heading-2');
+  assert.equal(loaded.blocks[0].children[0].children[0].checked, true);
+  assert.match(loaded.blocks[0].html, /target="_blank"/);
+  assert.doesNotMatch(loaded.blocks[0].html, /onclick/);
+});
+
+test('unsafe links and media are removed by normalization', () => {
+  const storage = loadStorage();
+  const loaded = storage.normalizeNote({
+    blocks: [{
+      type: 'paragraph',
+      html: '<a href="javascript:alert(1)">unsafe</a><img src="https://tracker.test/pixel">safe text'
+    }]
+  });
+
+  assert.doesNotMatch(loaded.blocks[0].html, /javascript:|img|src=/i);
+  assert.match(loaded.blocks[0].html, /unsafe/);
+  assert.match(loaded.blocks[0].html, /safe text/);
 });

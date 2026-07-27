@@ -1,0 +1,24 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const test = require('node:test');
+
+const html = fs.readFileSync('index.html', 'utf8');
+const packageData = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+
+test('HTML and package versions match', () => {
+  const version = html.match(/name="application-version" content="([^"]+)"/)?.[1];
+  assert.equal(version, packageData.version);
+});
+
+test('every active runtime asset is cache-busted with the release version', () => {
+  for (const asset of ['style.css', 'storage.js', 'editor.js', 'ui.js', 'app.js']) {
+    assert.match(html, new RegExp(`${asset.replace('.', '\\.') }\\?v=${packageData.version}`));
+  }
+});
+
+test('index stays a lightweight shell without an inline implementation', () => {
+  assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>[\s\S]*?\S[\s\S]*?<\/script>/i);
+  assert.doesNotMatch(html, /<style\b/i);
+});
