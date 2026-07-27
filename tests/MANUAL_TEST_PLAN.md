@@ -3,6 +3,9 @@
 Serve the repository with `python3 -m http.server 4173`, open the page in a desktop
 browser, keep DevTools Console visible, and repeat the responsive checks at 375 px.
 
+Before interaction, inspect the page source and confirm application version 0.7.0
+and `editor.js?v=0.7.0`; an older value means the new editor is not deployed.
+
 - Create paragraph, H1, H2, H3, bullet, number, checklist, toggle, quote, code, and
   divider blocks from the slash menu. Filter with `/todo`, `/heading`, `/code`, and
   `/toggle`; use arrows, Enter, Escape, and pointer selection.
@@ -13,16 +16,12 @@ browser, keep DevTools Console visible, and repeat the responsive checks at 375 
   checklists, quotes, and code continue their type once and become paragraphs on
   the next empty Enter without crossing their parent; toggle Enter focuses a child;
   and Shift+Enter always creates a soft break.
-- Verify Enter splits ordinary content; empty headings/lists become paragraphs;
-  toggle Enter focuses a child; quote/code exit after a final empty line; and
-  Shift+Enter always creates a soft break.
 - Use Tab and Shift+Tab on one block and a native selection spanning several
   blocks. Verify tree depth changes one level, order and complete subtrees survive,
   and Tab/Shift+Tab edit selected code lines rather than nesting the code block.
 - Exercise Backspace at the start and in text. Exercise Delete normally. Press
   Ctrl+A/Cmd+A twice, delete, and verify one editable paragraph remains. Undo and
   redo typing, transforms, nesting, dragging, deletion, and whole-note reset.
-  Ctrl+A/Cmd+A twice, delete, and verify one editable paragraph remains.
 - Drag-select partial text, multiple lines, adjacent blocks, and nested blocks.
   Use context actions for duplicate, delete, move, transform, and clear formatting
   across the selection; verify selected parents are handled only once.
