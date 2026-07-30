@@ -1,6 +1,6 @@
 {
   "name": "note-u",
-  "version": "0.7.3",
+  "version": "0.7.5",
   "private": true,
   "description": "A URL-only, static note editor",
   "scripts": {

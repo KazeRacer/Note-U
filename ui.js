@@ -490,7 +490,7 @@
         const button = document.createElement('button');
         button.type = 'button';
         button.textContent = icon;
-        button.setAttribute('aria-label', `Use ${icon} icon`);
+        button.setAttribute('aria-label', icon ? `Use ${icon} icon` : 'Use empty icon');
         button.addEventListener('click', () => {
           onSelect(icon);
           closeIconPicker();
