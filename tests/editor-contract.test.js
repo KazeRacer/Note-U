@@ -7,6 +7,7 @@ const test = require('node:test');
 const editor = fs.readFileSync('editor.js', 'utf8');
 const html = fs.readFileSync('index.html', 'utf8');
 const ui = fs.readFileSync('ui.js', 'utf8');
+const app = fs.readFileSync('app.js', 'utf8');
 
 test('only block contents are editing hosts', () => {
   assert.match(html, /id="editor"[\s\S]*?contenteditable="false"/);
@@ -49,4 +50,15 @@ test('soft Enter inserts a newline immediately and empty toggle children exit', 
 test('slash menu arrow navigation clamps at both ends', () => {
   assert.match(ui, /Math\.max\(0, Math\.min\(selectedIndex \+ delta, menuState\.items\.length - 1\)\)/);
   assert.doesNotMatch(ui, /selectedIndex \+ delta \+ menuState\.items\.length\) %/);
+});
+
+test('pointer selection extends native ranges across block editing hosts', () => {
+  assert.match(editor, /function caretFromPoint\(x, y\)/);
+  assert.match(editor, /function extendPointerSelection\(event\)/);
+  assert.match(editor, /selection\.setBaseAndExtent/);
+  assert.match(editor, /focusBlock === pointerSelection\.anchorBlock/);
+});
+
+test('favicon choices include all four directional arrows', () => {
+  for (const icon of ['⬆️', '⬇️', '➡️', '⬅️']) assert.ok(app.includes(`'${icon}'`));
 });

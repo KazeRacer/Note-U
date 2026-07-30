@@ -37,6 +37,7 @@
     let historyIndex = -1;
     let restoringHistory = false;
     let drag = null;
+    let pointerSelection = null;
     let suppressHandleClick = false;
 
     root.contentEditable = 'false';
@@ -189,6 +190,57 @@
       return element?.closest?.('.block') || null;
     }
 
+    function caretFromPoint(x, y) {
+      if (document.caretPositionFromPoint) {
+        const position = document.caretPositionFromPoint(x, y);
+        if (position) return { node: position.offsetNode, offset: position.offset };
+      }
+      if (document.caretRangeFromPoint) {
+        const range = document.caretRangeFromPoint(x, y);
+        if (range) return { node: range.startContainer, offset: range.startOffset };
+      }
+      return null;
+    }
+
+    function extendPointerSelection(event) {
+      if (!pointerSelection || event.pointerId !== pointerSelection.pointerId || !(event.buttons & 1)) return false;
+      const focus = caretFromPoint(event.clientX, event.clientY);
+      if (!focus || !root.contains(focus.node)) return false;
+      const focusBlock = blockFrom(focus.node);
+      if (!pointerSelection.started && focusBlock === pointerSelection.anchorBlock) return false;
+      event.preventDefault();
+      pointerSelection.started = true;
+      const selection = window.getSelection();
+      if (selection.setBaseAndExtent) {
+        selection.setBaseAndExtent(
+          pointerSelection.anchor.node,
+          pointerSelection.anchor.offset,
+          focus.node,
+          focus.offset
+        );
+      } else {
+        const range = document.createRange();
+        const anchorRange = document.createRange();
+        const focusRange = document.createRange();
+        anchorRange.setStart(pointerSelection.anchor.node, pointerSelection.anchor.offset);
+        anchorRange.collapse(true);
+        focusRange.setStart(focus.node, focus.offset);
+        focusRange.collapse(true);
+        if (anchorRange.compareBoundaryPoints(Range.START_TO_START, focusRange) <= 0) {
+          range.setStart(pointerSelection.anchor.node, pointerSelection.anchor.offset);
+          range.setEnd(focus.node, focus.offset);
+        } else {
+          range.setStart(focus.node, focus.offset);
+          range.setEnd(pointerSelection.anchor.node, pointerSelection.anchor.offset);
+        }
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      saveSelection();
+      onSelectionChange(selection);
+      return true;
+    }
+
     function currentBlock() {
       const selection = window.getSelection();
       return blockFrom(selection?.anchorNode) || activeMenuBlock;
@@ -197,7 +249,11 @@
     function selectionInEditor(selection = window.getSelection()) {
       if (!selection || selection.rangeCount === 0) return false;
       const range = selection.getRangeAt(0);
-      return root.contains(range.startContainer) && root.contains(range.endContainer);
+      const hits = [...root.querySelectorAll('.block')].filter((block) => {
+        const own = contentOf(block) || block.querySelector(':scope > .block-main > .block-divider');
+        try { return own && range.intersectsNode(own); } catch { return false; }
+      });
+      return hits.filter((block) => !hits.some((other) => other !== block && other.contains(block)));
     }
 
     function selectedBlocks(fallback = null) {
@@ -842,13 +898,28 @@
 
     root.addEventListener('pointerdown', (event) => {
       const button = event.target.closest?.('[data-drag-handle]');
+      if (!button && event.button === 0) {
+        const content = event.target.closest?.('[data-block-content]');
+        const anchor = content ? caretFromPoint(event.clientX, event.clientY) : null;
+        if (anchor && root.contains(anchor.node)) {
+          pointerSelection = {
+            pointerId: event.pointerId,
+            anchor,
+            anchorBlock: blockFrom(anchor.node),
+            started: false
+          };
+        }
+        return;
+      }
       if (!button || event.button !== 0) return;
+      pointerSelection = null;
       event.preventDefault();
       button.setPointerCapture?.(event.pointerId);
       drag = { block: button.closest('.block'), pointerId: event.pointerId, x: event.clientX, y: event.clientY, target: null, position: null, started: false };
     }, { signal });
 
     root.addEventListener('pointermove', (event) => {
+      if (extendPointerSelection(event)) return;
       if (!drag || event.pointerId !== drag.pointerId) return;
       if (!drag.started && Math.hypot(event.clientX - drag.x, event.clientY - drag.y) < 5) return;
       event.preventDefault();
@@ -870,6 +941,7 @@
     }, { signal });
 
     root.addEventListener('pointerup', (event) => {
+      if (pointerSelection?.pointerId === event.pointerId) pointerSelection = null;
       if (!drag || event.pointerId !== drag.pointerId) return;
       if (drag.started && drag.target) {
         drag.target.insertAdjacentElement(drag.position === 'before' ? 'beforebegin' : 'afterend', drag.block);
@@ -877,7 +949,10 @@
       }
       clearDrag();
     }, { signal });
-    root.addEventListener('pointercancel', clearDrag, { signal });
+    root.addEventListener('pointercancel', () => {
+      pointerSelection = null;
+      clearDrag();
+    }, { signal });
 
     document.addEventListener('selectionchange', () => {
       const selection = window.getSelection();

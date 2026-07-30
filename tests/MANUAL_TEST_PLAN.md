@@ -3,8 +3,8 @@
 Serve the repository with `python3 -m http.server 4173`, open the page in a desktop
 browser, keep DevTools Console visible, and repeat the responsive checks at 375 px.
 
-Before interaction, inspect the page source and confirm application version 0.7.1
-and `editor.js?v=0.7.1`; an older value means the new editor is not deployed.
+Before interaction, inspect the page source and confirm application version 0.7.3
+and `editor.js?v=0.7.3`; an older value means the new editor is not deployed.
 
 - Create paragraph, H1, H2, H3, bullet, number, checklist, toggle, quote, code, and
   divider blocks from the slash menu. Filter with `/todo`, `/heading`, `/code`, and
@@ -25,6 +25,9 @@ and `editor.js?v=0.7.1`; an older value means the new editor is not deployed.
 - Drag-select partial text, multiple lines, adjacent blocks, and nested blocks.
   Use context actions for duplicate, delete, move, transform, and clear formatting
   across the selection; verify selected parents are handled only once.
+- Drag from text in one editing block through several sibling and nested blocks in
+  both directions. Verify native text highlighting follows the pointer, double and
+  triple click still work, and the lateral handle remains reserved for block drag.
 - Build three nested toggles containing every block type. Close, reload from the
   copied URL, reopen, move, duplicate, transform, indent, and outdent them.
 - Create interrupted and nested numbered sequences; insert, delete, move, indent,

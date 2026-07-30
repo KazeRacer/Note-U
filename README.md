@@ -37,6 +37,9 @@ clipboard HTML is never inserted.
 The editor root is deliberately not contenteditable. Each block has exactly one
 explicit editing host, so keyboard and input events always identify the block that
 owns them instead of depending on browser-specific nested-contenteditable targets.
+Pointer selection bridges those hosts with the Selection API when a drag crosses a
+block boundary, preserving ordinary single-block selection, double click, triple
+click, and the separate lateral-handle gesture used to move block subtrees.
 
 Enter after a non-empty heading creates a paragraph. Lists, checklists, quotes and
 code continue as the same block type on the first Enter; Enter on the resulting
@@ -59,3 +62,12 @@ application version. Accepting the `main` side for conflicts in `editor.js`,
 Runtime assets include the application version in their URL. This cache-busting
 query ensures GitHub Pages and the browser request the files from the merged
 release rather than reusing an older editor script.
+
+## Sharing titles
+
+The Share action passes the current note title, text, and complete URL to the Web
+Share API. Copy link also places a rich HTML link labelled with the note title on
+the clipboard while retaining the raw URL as plain text and URI-list data. Static
+Open Graph metadata remains `Note-U`: URL fragments are not sent to web servers or
+social preview crawlers, so a GitHub Pages-only app cannot generate per-note Open
+Graph tags without violating the no-backend constraint.

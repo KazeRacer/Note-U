@@ -6,6 +6,7 @@ const test = require('node:test');
 
 const html = fs.readFileSync('index.html', 'utf8');
 const packageData = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const app = fs.readFileSync('app.js', 'utf8');
 
 test('HTML and package versions match', () => {
   const version = html.match(/name="application-version" content="([^"]+)"/)?.[1];
@@ -27,4 +28,12 @@ test('shared links identify the application as Note-U', () => {
   assert.match(html, /<title>Note-U<\/title>/);
   assert.match(html, /property="og:title" content="Note-U"/);
   assert.match(html, /name="application-name" content="Note-U"/);
+});
+
+test('Share sends the note title and Copy link provides rich and plain formats', () => {
+  assert.match(html, /id="share-note-button"/);
+  assert.match(app, /navigator\.share\(\{ title, text: title, url: window\.location\.href \}\)/);
+  assert.match(app, /'text\/plain'/);
+  assert.match(app, /'text\/uri-list'/);
+  assert.match(app, /'text\/html'/);
 });
