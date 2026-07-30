@@ -10,13 +10,15 @@
   const inlineToolbar = document.getElementById('inline-toolbar');
   const toast = document.getElementById('toast');
   const copyLinkButton = document.getElementById('copy-link-button');
+  const shareNoteButton = document.getElementById('share-note-button');
   const newNoteButton = document.getElementById('new-note-button');
 
   const ICONS = [
     '✏️', '📝', '💡', '📌', '⭐', '🔥',
     '🚀', '🎯', '📚', '💻', '🛠️', '🎨',
     '✅', '🧠', '📊', '💰', '🌐', '☕',
-    '🔖', '🗂️', '🧭', '🔬', '📐', '🪴'
+    '🔖', '🗂️', '🧭', '🔬', '📐', '🪴',
+    '⬆️', '⬇️', '➡️', '⬅️'
   ];
 
   let editor = null;
@@ -93,7 +95,19 @@
     saveNow();
 
     try {
-      await navigator.clipboard.writeText(window.location.href);
+      const title = titleInput.value.trim() || 'Untitled';
+      if (navigator.clipboard.write && window.ClipboardItem) {
+        const safeTitle = title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        const safeUrl = window.location.href.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/plain': new Blob([window.location.href], { type: 'text/plain' }),
+          'text/uri-list': new Blob([window.location.href], { type: 'text/uri-list' }),
+          'text/html': new Blob([`<a href="${safeUrl}">${safeTitle}</a>`], { type: 'text/html' })
+        })]);
+      } else {
+        await navigator.clipboard.writeText(window.location.href);
+      }
       ui.showToast('Link copied');
     } catch {
       const temporaryInput = document.createElement('textarea');
@@ -105,6 +119,24 @@
       const copied = document.execCommand('copy');
       temporaryInput.remove();
       ui.showToast(copied ? 'Link copied' : 'Unable to copy the link');
+    }
+  }
+
+  async function shareCurrentNote() {
+    saveNow();
+    const title = titleInput.value.trim() || 'Untitled';
+    if (!navigator.share) {
+      await copyCurrentLink();
+      ui.showToast('Sharing is unavailable; link copied');
+      return;
+    }
+    try {
+      await navigator.share({ title, text: title, url: window.location.href });
+    } catch (error) {
+      if (error?.name !== 'AbortError') {
+        console.error('Unable to share the note.', error);
+        ui.showToast('Unable to share this note');
+      }
     }
   }
 
@@ -164,6 +196,7 @@
   });
 
   copyLinkButton.addEventListener('click', copyCurrentLink);
+  shareNoteButton.addEventListener('click', shareCurrentNote);
   newNoteButton.addEventListener('click', createNewNote);
 
   window.addEventListener('hashchange', () => {
