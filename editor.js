@@ -249,7 +249,11 @@
     function selectionInEditor(selection = window.getSelection()) {
       if (!selection || selection.rangeCount === 0) return false;
       const range = selection.getRangeAt(0);
-      return root.contains(range.startContainer) && root.contains(range.endContainer);
+      const hits = [...root.querySelectorAll('.block')].filter((block) => {
+        const own = contentOf(block) || block.querySelector(':scope > .block-main > .block-divider');
+        try { return own && range.intersectsNode(own); } catch { return false; }
+      });
+      return hits.filter((block) => !hits.some((other) => other !== block && other.contains(block)));
     }
 
     function selectedBlocks(fallback = null) {
