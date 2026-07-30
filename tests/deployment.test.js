@@ -32,7 +32,10 @@ test('shared links identify the application as Note-U', () => {
 
 test('Share sends the note title and Copy link provides rich and plain formats', () => {
   assert.match(html, /id="share-note-button"/);
-  assert.match(app, /navigator\.share\(\{ title, text: title, url: window\.location\.href \}\)/);
+  assert.match(
+    app,
+    /navigator\.share\(\{\s*title,\s*text:\s*title,\s*url:\s*window\.location\.href\s*\}\)/
+  );
   assert.match(app, /'text\/plain'/);
   assert.match(app, /'text\/uri-list'/);
   assert.match(app, /'text\/html'/);
