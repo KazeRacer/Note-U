@@ -1,8 +1,3 @@
-diff --git a/README.md b/README.md
-index fd0d0b3969230656449ba5948acf2373a0058d8b..ee6b5a865c83352c43b7b39973983218fca20400 100644
---- a/README.md
-+++ b/README.md
-@@ -1,23 +1,73 @@
  # Note-U
  
  A portable, serverless note editor.
