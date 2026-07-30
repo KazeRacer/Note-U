@@ -39,6 +39,8 @@ test('undo, multi-block transforms and plain-text paste remain integrated', () =
   assert.match(editor, /function recordHistory/);
   assert.match(editor, /blocks\.map\(\(item\) =>/);
   assert.match(editor, /getData\('text\/plain'\)/);
+  assert.match(editor, /const containsUrl = URL_PATTERN\.test\(text\);\s*URL_PATTERN\.lastIndex = 0;\s*if \(containsUrl\) insertLinkedText\(text\)/);
+  assert.doesNotMatch(editor, /execCommand\('createLink',[^\n]+text\.trim\(\)\)/);
 });
 
 test('soft Enter inserts a newline immediately and empty toggle children exit', () => {
@@ -61,4 +63,9 @@ test('pointer selection extends native ranges across block editing hosts', () =>
 
 test('favicon choices include all four directional arrows', () => {
   for (const icon of ['⬆️', '⬇️', '➡️', '⬅️']) assert.ok(app.includes(`'${icon}'`));
+});
+
+test('the empty favicon is the final icon picker choice', () => {
+  const icons = app.match(/const ICONS = \[([\s\S]*?)\];/)?.[1];
+  assert.match(icons, /'•',\s*''\s*$/);
 });

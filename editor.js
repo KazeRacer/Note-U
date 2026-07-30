@@ -662,14 +662,9 @@
       const text = event.clipboardData?.getData('text/plain') || '';
       if (!text) return;
       if (!text.includes('\n')) {
-        const selection = window.getSelection();
-        if (/^(https?:|mailto:|tel:)/i.test(text.trim()) && !selection.isCollapsed) {
-          document.execCommand('createLink', false, text.trim());
-          root.querySelectorAll('a').forEach((anchor) => {
-            anchor.target = '_blank';
-            anchor.rel = 'noopener noreferrer';
-          });
-        } else if (URL_PATTERN.test(text)) insertLinkedText(text);
+        const containsUrl = URL_PATTERN.test(text);
+        URL_PATTERN.lastIndex = 0;
+        if (containsUrl) insertLinkedText(text);
         else insertText(text);
         URL_PATTERN.lastIndex = 0;
         changed();
