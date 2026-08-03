@@ -1065,6 +1065,40 @@
       if (!mergeAuthoredBlocks(block, next, content)) selectOuterBlock(next);
     }
 
+
+    function caretAtEnd(content) {
+      const selection = window.getSelection();
+      if (!selection?.isCollapsed || !selection.rangeCount) return false;
+      const range = selection.getRangeAt(0);
+      const after = document.createRange();
+      after.selectNodeContents(content);
+      after.setStart(range.endContainer, range.endOffset);
+      return after.toString() === '';
+    }
+
+    function deleteForward(event, block, content) {
+      if (!caretAtEnd(content)) return;
+      const next = block.nextElementSibling;
+      if (!next?.classList.contains('block')) return;
+      const nextContent = contentOf(next);
+      event.preventDefault();
+      if (!nextContent || next.dataset.type === 'divider') {
+        const range = document.createRange();
+        range.selectNode(next);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return;
+      }
+      if (content.innerHTML === '<br>') content.replaceChildren();
+      [...nextContent.childNodes].forEach((node) => content.append(node));
+      const children = childContainer(next, false);
+      if (children) [...children.children].forEach((child) => childContainer(block).append(child));
+      next.remove();
+      focus(content, true);
+      changed();
+    }
+
     function normalizedText(content) {
       return (content.textContent || '').replace(/\u200B/g, '').replace(/\u00A0/g, ' ');
     }
