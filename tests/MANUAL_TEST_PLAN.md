@@ -3,8 +3,8 @@
 Serve the repository with `python3 -m http.server 4173`, open the page in a desktop
 browser, keep DevTools Console visible, and repeat the responsive checks at 375 px.
 
-Before interaction, inspect the page source and confirm application version 0.7.3
-and `editor.js?v=0.7.3`; an older value means the new editor is not deployed.
+Before interaction, inspect the page source and confirm application version 0.8.0
+and `editor.js?v=0.8.0`; an older value means the new editor is not deployed.
 
 - Create paragraph, H1, H2, H3, bullet, number, checklist, toggle, quote, code, and
   divider blocks from the slash menu. Filter with `/todo`, `/heading`, `/code`, and
@@ -45,3 +45,17 @@ and `editor.js?v=0.7.3`; an older value means the new editor is not deployed.
 - At desktop and 375 px widths, verify controls do not overlap, menus remain inside
   and scroll within the viewport, the URL-only message is centered, and native
   pointer selection works. Finish with zero unexpected Console errors.
+
+
+## Calculator acceptance
+
+- Create calculators with `/calculator`, `/calc`, both block menus, Turn into, and
+  `== ` at the exact start of an empty paragraph. Confirm it does not activate
+  mid-line, in another type, during composition, or from pasted text.
+- Test Enter, Shift+Enter, Alt+Enter, Ctrl/Cmd+Enter, result click, multiline paste,
+  Escape, Tab, Shift+Tab, first-empty-line Backspace, undo/redo, selection, duplicate,
+  delete, drag, nesting/outdenting, and Calculator-to-paragraph conversion.
+- Evaluate arithmetic, suffixes, percentages, variables, labels, comments, sections,
+  subtotals, totals, malformed input, and zero division at desktop and 375 px.
+- Reload copied calculator and legacy URLs. Confirm authored lines, hierarchy, and
+  IDs survive while derived results and errors are rebuilt rather than serialized.

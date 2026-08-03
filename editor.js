@@ -3,14 +3,14 @@
 
   const TYPES = new Set([
     'paragraph', 'heading-1', 'heading-2', 'heading-3', 'bulleted-list',
-    'numbered-list', 'checklist', 'toggle', 'quote', 'code', 'divider'
+    'numbered-list', 'checklist', 'toggle', 'quote', 'code', 'divider', 'calculator'
   ]);
   const CONTINUATION_TYPES = new Set([
     'bulleted-list', 'numbered-list', 'checklist', 'quote', 'code'
   ]);
   const HEADING_TYPES = new Set(['heading-1', 'heading-2', 'heading-3']);
   const SHORTCUTS = new Map([
-    ['``` ', 'code'], ['--- ', 'divider'], ['[ ] ', 'checklist'],
+    ['``` ', 'code'], ['--- ', 'divider'], ['== ', 'calculator'], ['[ ] ', 'checklist'],
     ['[] ', 'checklist'], ['### ', 'heading-3'], ['## ', 'heading-2'],
     ['# ', 'heading-1'], ['1. ', 'numbered-list'], ['- ', 'bulleted-list'],
     ['> ', 'toggle']
@@ -39,6 +39,7 @@
     let drag = null;
     let pointerSelection = null;
     let suppressHandleClick = false;
+    let skipComposedShortcut = false;
 
     root.contentEditable = 'false';
 
@@ -130,6 +131,21 @@
         body.dataset.blockChildren = 'true';
         row.append(caret, title);
         main.append(row, body);
+      } else if (type === 'calculator') {
+        const sheet = document.createElement('div');
+        sheet.className = 'calculator-sheet';
+        sheet.setAttribute('aria-label', 'Calculator');
+        const marker = document.createElement('span');
+        marker.className = 'calculator-marker';
+        marker.setAttribute('aria-hidden', 'true');
+        marker.textContent = 'fx';
+        const lines = Array.isArray(data.lines) ? data.lines : [data.text ?? plainText(data.html || '')];
+        const list = document.createElement('div');
+        list.className = 'calculator-lines';
+        (lines.length ? lines : ['']).forEach((text) => list.append(createCalculatorRow(text)));
+        sheet.append(marker, list);
+        main.append(sheet);
+        recalculate(block);
       } else if (type === 'code') {
         const code = document.createElement('pre');
         code.className = 'block-content code-content';
@@ -171,6 +187,53 @@
       return block;
     }
 
+    function createCalculatorRow(text = '') {
+      const row = document.createElement('div');
+      row.className = 'calculator-row';
+      const input = document.createElement('div');
+      input.className = 'calculator-input';
+      input.dataset.blockContent = 'true';
+      input.dataset.calculatorLine = 'true';
+      input.contentEditable = 'true';
+      input.spellcheck = false;
+      input.setAttribute('role', 'textbox');
+      input.setAttribute('aria-label', 'Calculation expression');
+      input.textContent = String(text ?? '').replace(/\r?\n/g, ' ');
+      if (!input.textContent) input.append(document.createElement('br'));
+      const output = document.createElement('button');
+      output.type = 'button';
+      output.className = 'calculator-result';
+      output.tabIndex = -1;
+      output.contentEditable = 'false';
+      row.append(input, output);
+      return row;
+    }
+
+    function calculatorLines(block) {
+      return [...block.querySelectorAll(':scope > .block-main .calculator-input')].map((line) => line.textContent || '');
+    }
+
+    function recalculate(block) {
+      if (block?.dataset.type !== 'calculator' || !window.NoteCalculator) return;
+      const rows = [...block.querySelectorAll(':scope > .block-main .calculator-row')];
+      const results = window.NoteCalculator.evaluateBlock(calculatorLines(block));
+      rows.forEach((row, index) => {
+        const result = results[index];
+        const input = row.querySelector('.calculator-input');
+        const output = row.querySelector('.calculator-result');
+        row.classList.toggle('is-section', result.kind === 'section');
+        output.classList.toggle('is-error', Boolean(result.error));
+        output.classList.toggle('is-incomplete', Boolean(result.incomplete));
+        output.disabled = result.value === undefined;
+        output.dataset.literal = result.literal || '';
+        output.textContent = result.error ? `Error: ${result.error}` : result.formatted || result.warning || '';
+        const status = result.error || result.warning || (result.formatted ? `Result: ${result.formatted}` : 'No result');
+        output.setAttribute('aria-label', status);
+        input.setAttribute('aria-describedby', `${block.dataset.blockId}-result-${index}`);
+        output.id = `${block.dataset.blockId}-result-${index}`;
+      });
+    }
+
     function plainText(html) {
       const template = document.createElement('template');
       template.innerHTML = html;
@@ -182,6 +245,7 @@
       if (block.dataset.type === 'toggle') {
         return block.querySelector(':scope > .block-main > .toggle-row > .toggle-title');
       }
+      if (block.dataset.type === 'calculator') return block.querySelector(':scope > .block-main .calculator-input');
       return block.querySelector(':scope > .block-main [data-block-content]');
     }
 
@@ -306,7 +370,9 @@
       const type = typeOf(block.dataset.type);
       const result = { type, id: block.dataset.blockId };
       const content = contentOf(block);
-      if (type === 'code') {
+      if (type === 'calculator') {
+        result.lines = calculatorLines(block);
+      } else if (type === 'code') {
         if (content.textContent) result.text = content.textContent;
       } else if (type !== 'divider') {
         if (content.innerHTML && content.innerHTML !== '<br>') result.html = content.innerHTML;
@@ -419,10 +485,12 @@
       const oldType = block.dataset.type;
       const content = contentOf(block);
       const children = [...childContainer(block, false)?.children || []];
-      const html = oldType === 'code' ? escapeHtml(content?.textContent || '') : content?.innerHTML || '';
+      const calculatorText = oldType === 'calculator' ? calculatorLines(block).join('\n') : '';
+      const html = oldType === 'code' ? escapeHtml(content?.textContent || '') : oldType === 'calculator' ? escapeHtml(calculatorText) : content?.innerHTML || '';
       const replacement = createBlock(target, {
         html,
-        text: target === 'code' ? content?.textContent || plainText(html) : undefined,
+        text: target === 'code' ? (oldType === 'calculator' ? calculatorText : content?.textContent || plainText(html)) : undefined,
+        lines: target === 'calculator' ? (oldType === 'calculator' ? calculatorLines(block) : [content?.textContent || plainText(html)]) : undefined,
         titleStyle: data.titleStyle || (HEADING_TYPES.has(oldType) ? oldType : 'paragraph'),
         children: target === 'toggle' ? children : children
       });
@@ -468,6 +536,29 @@
 
     function enter(event, block, content) {
       event.preventDefault();
+      if (block.dataset.type === 'calculator') {
+        if (event.ctrlKey || event.metaKey) {
+          const paragraph = createBlock('paragraph');
+          block.insertAdjacentElement('afterend', paragraph);
+          focus(contentOf(paragraph));
+          changed();
+          return;
+        }
+        if (event.altKey) {
+          const rows = [...block.querySelectorAll('.calculator-row')];
+          const rowIndex = rows.indexOf(content.closest('.calculator-row'));
+          const prior = rows.slice(0, rowIndex).reverse().map((row) => row.querySelector('.calculator-result')?.dataset.literal).find(Boolean);
+          if (prior) { insertText(prior); recalculate(block); changed(); }
+          return;
+        }
+        const row = content.closest('.calculator-row');
+        const next = createCalculatorRow('');
+        row.insertAdjacentElement('afterend', next);
+        focus(next.querySelector('.calculator-input'));
+        recalculate(block);
+        changed();
+        return;
+      }
       if (event.shiftKey) {
         insertText('\n');
         changed();
@@ -628,6 +719,7 @@
       }
       const target = SHORTCUTS.get(text);
       if (!target) return false;
+      if (target === 'calculator' && block.dataset.type !== 'paragraph') return false;
       content.innerHTML = '<br>';
       const transformed = replace(block, target);
       if (target === 'divider') {
@@ -661,6 +753,15 @@
       event.preventDefault();
       const text = event.clipboardData?.getData('text/plain') || '';
       if (!text) return;
+      if (block.dataset.type === 'calculator') {
+        const content = event.target.closest('[data-calculator-line]');
+        const lines = text.replace(/\r\n?/g, '\n').split('\n');
+        insertText(lines.shift());
+        let row = content.closest('.calculator-row');
+        lines.forEach((line) => { const next = createCalculatorRow(line); row.insertAdjacentElement('afterend', next); row = next; });
+        if (lines.length) focus(row.querySelector('.calculator-input'), true);
+        recalculate(block); changed(); return;
+      }
       if (!text.includes('\n')) {
         const containsUrl = URL_PATTERN.test(text);
         URL_PATTERN.lastIndex = 0;
@@ -850,10 +951,18 @@
       const block = blockFrom(content);
       if (!content || !block) return;
       delete block.dataset.exitedContainer;
-      if (block.dataset.type !== 'code' && shortcut(block, content)) return;
+      if (event.isComposing || skipComposedShortcut) {
+        skipComposedShortcut = false;
+        changed();
+        return;
+      }
+      if (block.dataset.type !== 'code' && block.dataset.type !== 'calculator' && shortcut(block, content)) return;
+      if (block.dataset.type === 'calculator') { recalculate(block); changed(); return; }
       slash(block, content);
       changed();
     }, { signal });
+
+    root.addEventListener('compositionend', () => { skipComposedShortcut = true; }, { signal });
 
     root.addEventListener('paste', (event) => {
       const content = event.target.closest?.('[data-block-content]');
@@ -870,6 +979,16 @@
     }, { signal });
 
     root.addEventListener('click', (event) => {
+      const result = event.target.closest?.('.calculator-result:not(:disabled)');
+      if (result) {
+        event.preventDefault();
+        const block = result.closest('.block[data-type="calculator"]');
+        const selection = window.getSelection();
+        if (selection?.rangeCount && block.contains(selection.anchorNode)) {
+          insertText(result.dataset.literal || ''); recalculate(block); changed();
+        }
+        return;
+      }
       const caret = event.target.closest?.('[data-toggle-caret]');
       if (caret) {
         const block = caret.closest('.block[data-type="toggle"]');

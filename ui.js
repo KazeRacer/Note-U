@@ -84,6 +84,14 @@
     },
     {
       section: 'Blocks',
+      command: 'transform:calculator',
+      icon: 'fx',
+      title: 'Calculator',
+      description: 'Calculate multiline expressions',
+      keywords: 'calculator calc numbr math arithmetic'
+    },
+    {
+      section: 'Blocks',
       command: 'transform:divider',
       icon: '—',
       title: 'Divider',

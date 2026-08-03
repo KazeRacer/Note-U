@@ -111,3 +111,19 @@ test('unsafe links and media are removed by normalization', () => {
   assert.match(loaded.blocks[0].html, /unsafe/);
   assert.match(loaded.blocks[0].html, /safe text/);
 });
+
+test('calculator lines and recursive children round-trip without derived state', () => {
+  const storage = loadStorage();
+  const note = { blocks: [{
+    id: 'calc-1', type: 'calculator', lines: ['Hotel = 180 * 4', 'Hotel: hotel', 'total'],
+    results: [720, 720, 720], errors: ['not serialized'],
+    children: [{ id: 'child-1', type: 'paragraph', html: 'attached' }]
+  }] };
+  const encoded = storage.encodeNote(note);
+  const loaded = storage.loadFromHash(encoded);
+  assert.equal(loaded.blocks[0].type, 'calculator');
+  assert.deepEqual(Array.from(loaded.blocks[0].lines), note.blocks[0].lines);
+  assert.equal(loaded.blocks[0].children[0].id, 'child-1');
+  assert.equal(loaded.blocks[0].results, undefined);
+  assert.equal(loaded.blocks[0].errors, undefined);
+});

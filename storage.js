@@ -232,7 +232,9 @@
       divider: 'divider',
       hr: 'divider',
       code: 'code',
-      'code-block': 'code'
+      'code-block': 'code',
+      calculator: 'calculator',
+      calc: 'calculator'
     };
     return mappings[normalized] || 'paragraph';
   }
@@ -393,7 +395,8 @@
     toggle: 'tg',
     quote: 'q',
     divider: 'hr',
-    code: 'cd'
+    code: 'cd',
+    calculator: 'ca'
   });
 
   const CODE_BLOCK_TYPES = Object.freeze(
@@ -425,6 +428,13 @@
         ? value.map((segment) => segment?.text ?? segment?.value ?? segment?.content ?? '').join('')
         : String(value ?? '');
       return { type, indent, text, ...(id ? { id } : {}), ...(children.length ? { children } : {}) };
+    }
+
+    if (type === 'calculator') {
+      const rawLines = block.lines ?? block.l ?? block.text ?? block.value ?? [];
+      const lines = (Array.isArray(rawLines) ? rawLines : String(rawLines ?? '').split(/\r?\n/))
+        .slice(0, 1000).map((line) => String(line ?? '').slice(0, 10000));
+      return { type, indent, lines: lines.length ? lines : [''], ...(id ? { id } : {}), ...(children.length ? { children } : {}) };
     }
 
     if (type === 'toggle') {
@@ -491,6 +501,13 @@
 
     if (normalized.type === 'code') {
       if (normalized.text) compact.v = normalized.text;
+      if (normalized.children?.length) compact.b = normalized.children.map(compactBlock);
+      return compact;
+    }
+
+
+    if (normalized.type === 'calculator') {
+      compact.l = normalized.lines;
       if (normalized.children?.length) compact.b = normalized.children.map(compactBlock);
       return compact;
     }
