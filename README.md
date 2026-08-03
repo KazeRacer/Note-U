@@ -71,3 +71,38 @@
 +Open Graph metadata remains `Note-U`: URL fragments are not sent to web servers or
 +social preview crawlers, so a GitHub Pages-only app cannot generate per-note Open
 +Graph tags without violating the no-backend constraint.
+
+## Calculator blocks
+
+Create a self-contained Calculator block with `/calculator`, the `/calc` alias, the
+block menu, **Turn into → Calculator**, or by typing `== ` at the start of an empty
+paragraph. Calculator blocks remain normal recursive Note-U blocks: their stable
+ID, authored lines, ordered children, and position are URL-serialized, while
+results, variables, errors, caches, selection, and focus are always derived again
+after loading. Turning ordinary text into a calculator preserves its plain text;
+turning it back into a paragraph preserves authored lines separated by newlines.
+
+The restricted calculator engine supports parentheses, unary `+`/`-`, `+`, `-`,
+`*` (or `x`), `/`, right-associative `^`, and postfix `%`. Numbers may use valid
+comma or space thousands groups and case-insensitive `k` (thousand) or `m`
+(million) suffixes. A percentage normally means its fraction (`10%` is `0.1`);
+`A + B%` and `A - B%` adjust A by that percentage, while multiplication, division,
+and `B% of A` use the fractional value.
+
+Assignments such as `Price per night = 180` define case-insensitive, source-ordered
+variables for later lines, including multiword names. `Label: expression` creates
+an eligible labeled value, `// comment` adds an ignored trailing authored comment,
+and `# Section` starts a subtotal scope. Reserved `subtotal` rows sum eligible
+values in the current section; `total` and `sum` cover the block. Assignments,
+headings, errors, and aggregate rows are not automatically counted.
+
+Enter and Shift+Enter add a calculator line. Ctrl/Cmd+Enter exits to a paragraph;
+Alt+Enter inserts the previous valid result; Tab and Shift+Tab indent or outdent the
+whole block. Plain-text multiline paste creates calculator lines, and clicking a
+valid result inserts its parser-compatible numeric literal at an available caret.
+
+The calculator is local and deterministic. It never uses dynamic JavaScript,
+injected HTML, remote code, or a general-purpose math dependency. This release does
+not include currency, cryptocurrency, physical-unit, exchange-rate, or conversion
+support, and ordinary text blocks are not calculated. The token/value boundary in
+`calculator.js` allows future value types without replacing editor or URL integration.

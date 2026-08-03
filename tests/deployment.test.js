@@ -14,7 +14,7 @@ test('HTML and package versions match', () => {
 });
 
 test('every active runtime asset is cache-busted with the release version', () => {
-  for (const asset of ['style.css', 'storage.js', 'editor.js', 'ui.js', 'app.js']) {
+  for (const asset of ['style.css', 'storage.js', 'calculator.js', 'editor.js', 'ui.js', 'app.js']) {
     assert.match(html, new RegExp(`${asset.replace('.', '\\.') }\\?v=${packageData.version}`));
   }
 });

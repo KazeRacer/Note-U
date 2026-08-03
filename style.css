@@ -445,6 +445,83 @@ button {
   background: var(--border);
 }
 
+.calculator-sheet {
+  position: relative;
+  min-width: 0;
+  margin: 3px 0;
+  padding: 9px 10px 9px 34px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: rgba(35, 131, 226, 0.025);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.calculator-sheet:focus-within {
+  border-color: rgba(35, 131, 226, 0.3);
+  background: rgba(35, 131, 226, 0.045);
+}
+
+.calculator-marker {
+  position: absolute;
+  top: 11px;
+  left: 10px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  font-style: italic;
+  font-weight: 650;
+}
+
+.calculator-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(5rem, auto);
+  align-items: baseline;
+  gap: 14px;
+  min-height: 28px;
+}
+
+.calculator-input {
+  min-width: 0;
+  min-height: 28px;
+  padding: 2px 0;
+  outline: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.calculator-row:first-child .calculator-input:empty::before,
+.calculator-row:first-child .calculator-input:has(> br:only-child)::before {
+  content: "Type a calculation…";
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
+.calculator-result {
+  min-width: 5rem;
+  min-height: 28px;
+  padding: 2px 1px;
+  border: 0;
+  color: var(--text-muted);
+  background: transparent;
+  cursor: copy;
+  font: 550 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.calculator-result:disabled { cursor: default; }
+.calculator-result:not(:disabled):hover { color: var(--text-main); }
+.calculator-result.is-error { color: #a94a46; font-size: 11px; }
+.calculator-result.is-incomplete { opacity: 0.72; }
+.calculator-row.is-section { margin-top: 5px; }
+.calculator-row.is-section .calculator-input { color: var(--text-muted); font-size: 12px; font-weight: 700; letter-spacing: .03em; }
+
+@media (max-width: 480px) {
+  .calculator-row { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .calculator-result { justify-self: end; min-height: 22px; max-width: 100%; }
+}
+
 .toggle-row {
   display: flex;
   align-items: flex-start;
