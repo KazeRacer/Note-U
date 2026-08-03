@@ -36,13 +36,29 @@ test('current URL payloads round-trip supported block data', () => {
   };
 
   const loaded = storage.loadFromHash(`#${storage.encodeNote(note)}`);
-  assert.equal(loaded.version, 6);
+  assert.equal(loaded.version, 7);
   assert.equal(loaded.title, note.title);
   assert.equal(loaded.icon, note.icon);
   assert.equal(loaded.blocks[0].type, 'code');
   assert.equal(loaded.blocks[0].indent, 2);
   assert.equal(loaded.blocks[0].text, note.blocks[0].text);
   assert.equal(loaded.blocks[1].type, 'divider');
+});
+
+test('number format and stable calculator row IDs survive a URL round trip', () => {
+  const storage = loadStorage();
+  const note = { version: 7, numberFormat: 'european', blocks: [{
+    id: 'calc', type: 'calculator', rows: [{ id: 'row-a', text: '1,5 + 2' }]
+  }] };
+  const loaded = storage.loadFromHash(storage.encodeNote(note));
+  assert.equal(loaded.numberFormat, 'european');
+  assert.deepEqual(JSON.parse(JSON.stringify(loaded.blocks[0].rows)), note.blocks[0].rows);
+});
+
+test('legacy notes retain international number interpretation', () => {
+  const storage = loadStorage();
+  const loaded = storage.normalizeNote({ version: 6, numberFormat: 'european', blocks: [] });
+  assert.equal(loaded.numberFormat, 'international');
 });
 
 test('legacy percent-encoded JSON URLs remain readable', () => {

@@ -3,8 +3,8 @@
 Serve the repository with `python3 -m http.server 4173`, open the page in a desktop
 browser, keep DevTools Console visible, and repeat the responsive checks at 375 px.
 
-Before interaction, inspect the page source and confirm application version 0.9.0
-and `editor.js?v=0.9.0`; an older value means the new editor is not deployed.
+Before interaction, inspect the page source and confirm application version 0.10.0
+and `editor.js?v=0.10.0`; an older value means the new editor is not deployed.
 
 - Create paragraph, H1, H2, H3, bullet, number, checklist, toggle, quote, code, and
   divider blocks from the slash menu. Filter with `/todo`, `/heading`, `/code`, and
@@ -62,6 +62,21 @@ and `editor.js?v=0.9.0`; an older value means the new editor is not deployed.
   it, and verify the tree and authored Calculator rows round-trip. Ordinary address
   bar copy remains raw; static GitHub Pages cannot promise per-note link previews
   because URL fragments are not sent to the server.
+- Put the caret on the first/last visual line of paragraph, heading, list, toggle,
+  quote, code and Calculator surfaces. Use all four Arrow keys and Shift+Arrow;
+  verify movement follows visible recursive order, preserves horizontal position,
+  skips results and collapsed children, and never reaches the title or changes data.
+- Place a paragraph before and after Calculator, code, toggle, quote and divider
+  blocks. At every boundary, verify the first Backspace/Delete selects the outer
+  neighbor without changing it and the second key deliberately deletes it; undo
+  must restore the exact subtree.
+- In a three-row Calculator (`10 + 10`, empty, `20 + 20`), join every adjacent pair
+  with Backspace and Delete. Verify only authored row boundaries change, results are
+  recalculated, and surrounding paragraphs remain byte-for-byte unchanged.
+- Switch Number format between `1.234,56` and `1,234.56`; verify decimal comma,
+  decimal point, ambiguous three-digit separators, mixed pasted formats, totals,
+  variables and percentages. Reload the URL and confirm the selected format and
+  results are unchanged; legacy URLs must retain international interpretation.
 
 
 ## Calculator acceptance

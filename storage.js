@@ -1,17 +1,25 @@
 (() => {
   'use strict';
 
-  const CURRENT_VERSION = 6;
+  const CURRENT_VERSION = 7;
   const DEFAULT_NOTE = Object.freeze({
     version: CURRENT_VERSION,
     title: 'Note',
     icon: '✏️',
+    numberFormat: 'international',
     body: '',
     blocks: Object.freeze([])
   });
 
   function cloneDefaultNote() {
-    return { ...DEFAULT_NOTE, blocks: [] };
+    let numberFormat = DEFAULT_NOTE.numberFormat;
+    try {
+      const decimal = new Intl.NumberFormat(navigator.language).format(1.1);
+      if (decimal.includes(',')) numberFormat = 'european';
+    } catch {
+      // Non-browser runtimes and restricted locales use the legacy interpretation.
+    }
+    return { ...DEFAULT_NOTE, numberFormat, blocks: [] };
   }
 
   function bytesToBase64Url(bytes) {
@@ -434,7 +442,12 @@
       const rawLines = block.lines ?? block.l ?? block.text ?? block.value ?? [];
       const lines = (Array.isArray(rawLines) ? rawLines : String(rawLines ?? '').split(/\r?\n/))
         .slice(0, 1000).map((line) => String(line ?? '').slice(0, 10000));
-      return { type, indent, lines: lines.length ? lines : [''], ...(id ? { id } : {}), ...(children.length ? { children } : {}) };
+      const rawRows = block.rows ?? block.r;
+      const rows = Array.isArray(rawRows) ? rawRows.slice(0, 1000).map((row, index) => ({
+        id: typeof row?.id === 'string' ? row.id : `row-${index}`,
+        text: String(row?.text ?? '').slice(0, 10000)
+      })) : (lines.length ? lines : ['']).map((text, index) => ({ id: `row-${index}`, text }));
+      return { type, indent, lines: rows.map((row) => row.text), rows, ...(id ? { id } : {}), ...(children.length ? { children } : {}) };
     }
 
     if (type === 'toggle') {
@@ -508,6 +521,7 @@
 
     if (normalized.type === 'calculator') {
       compact.l = normalized.lines;
+      compact.r = normalized.rows.map((row) => ({ id: row.id, text: row.text }));
       if (normalized.children?.length) compact.b = normalized.children.map(compactBlock);
       return compact;
     }
@@ -539,6 +553,11 @@
         ? value.b
         : [];
 
+    const sourceVersion = Number(value.version ?? value.v ?? 0);
+    const numberFormat = sourceVersion >= 7 && (value.numberFormat === 'european' || value.f === 'e')
+      ? 'european'
+      : 'international';
+
     return {
       version: CURRENT_VERSION,
       title: typeof value.title === 'string'
@@ -551,6 +570,7 @@
         : typeof value.e === 'string'
           ? value.e
           : DEFAULT_NOTE.icon,
+      numberFormat,
       body: sanitizeBodyHtml(
         typeof value.body === 'string'
           ? value.body
@@ -616,6 +636,7 @@
       v: CURRENT_VERSION,
       t: normalized.title,
       e: normalized.icon,
+      f: normalized.numberFormat === 'european' ? 'e' : 'i',
       b: normalized.blocks.length
         ? normalized.blocks.map(compactBlock)
         : normalized.body || []

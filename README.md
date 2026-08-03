@@ -44,6 +44,20 @@ in code inserts a literal newline; Calculator Enter and Shift+Enter create rows.
 An empty trailing Calculator row exits to a paragraph, while Backspace removes only
 an empty row (or converts a sole empty Calculator to a paragraph).
 
+Boundary deletion uses an explicit compatibility table. Paragraphs and headings
+merge with each other; adjacent bullets, numbers, or to-dos merge only inside their
+own family and parent. Calculator, code, toggle, quote, divider, and other outer
+container/atomic boundaries never merge: the first boundary key structurally
+selects that neighbor, and only a subsequent deliberate deletion removes it.
+Calculator row boundaries are separate commands that join authored expressions and
+never include derived results.
+
+Calculator number parsing is controlled by the serialized note-level format. New
+notes choose European or international formatting from the author's browser locale;
+schema-v6 and older notes always migrate to the former international interpretation,
+so opening a shared legacy URL cannot change its results. Both common mixed formats
+are validated token by token; malformed punctuation is rejected rather than removed.
+
 ## Merging editor changes
 
 Do not resolve editor conflicts by blindly choosing **Accept incoming change** or
