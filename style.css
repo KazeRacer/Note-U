@@ -228,6 +228,7 @@ button {
   left: 0;
   color: var(--text-faint);
   pointer-events: none;
+  user-select: none;
 }
 
 .editor,
@@ -489,11 +490,12 @@ button {
   white-space: pre-wrap;
 }
 
-.calculator-row:first-child .calculator-input:empty::before,
-.calculator-row:first-child .calculator-input:has(> br:only-child)::before {
+.block.is-empty-calculator .calculator-row:first-child .calculator-input:empty::before,
+.block.is-empty-calculator .calculator-row:first-child .calculator-input:has(> br:only-child)::before {
   content: "Type a calculation…";
   color: var(--text-faint);
   pointer-events: none;
+  user-select: none;
 }
 
 .calculator-result {
