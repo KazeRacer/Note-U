@@ -16,6 +16,7 @@
     ['> ', 'toggle']
   ]);
   const URL_PATTERN = /https?:\/\/[^\s<]+/gi;
+  const SELECT_ALL_WINDOW = 1200;
 
   function createEditor(options = {}) {
     const {
@@ -40,6 +41,7 @@
     let pointerSelection = null;
     let suppressHandleClick = false;
     let skipComposedShortcut = false;
+    let selectAllState = { block: null, stage: 0, time: 0 };
 
     root.contentEditable = 'false';
 
@@ -217,6 +219,7 @@
       if (block?.dataset.type !== 'calculator' || !window.NoteCalculator) return;
       const rows = [...block.querySelectorAll(':scope > .block-main .calculator-row')];
       const results = window.NoteCalculator.evaluateBlock(calculatorLines(block));
+      block.classList.toggle('is-empty-calculator', rows.length === 1 && empty(rows[0]?.querySelector('.calculator-input')));
       rows.forEach((row, index) => {
         const result = results[index];
         const input = row.querySelector('.calculator-input');
@@ -552,6 +555,15 @@
           return;
         }
         const row = content.closest('.calculator-row');
+        const rows = [...block.querySelectorAll('.calculator-row')];
+        if (!event.shiftKey && empty(content) && row === rows.at(-1)) {
+          const paragraph = createBlock('paragraph');
+          row.remove();
+          block.insertAdjacentElement('afterend', paragraph);
+          focus(contentOf(paragraph));
+          changed();
+          return;
+        }
         const next = createCalculatorRow('');
         row.insertAdjacentElement('afterend', next);
         focus(next.querySelector('.calculator-input'));
@@ -635,22 +647,6 @@
         delete block.dataset.exitedContainer;
         return;
       }
-      if (block.dataset.type === 'code' && window.getSelection().isCollapsed) {
-        if (event.shiftKey) {
-          const selection = window.getSelection();
-          const range = selection.getRangeAt(0);
-          const content = contentOf(block);
-          const before = document.createRange();
-          before.selectNodeContents(content);
-          before.setEnd(range.startContainer, range.startOffset);
-          if (before.toString().endsWith('  ') && range.startContainer.nodeType === Node.TEXT_NODE) {
-            range.setStart(range.startContainer, Math.max(0, range.startOffset - 2));
-            range.deleteContents();
-          }
-        } else insertText('  ');
-        changed();
-        return;
-      }
       const blocks = selectedBlocks(block);
       const moved = event.shiftKey ? outdent(blocks) : indent(blocks);
       if (moved) changed();
@@ -668,6 +664,23 @@
 
     function backspace(event, block, content) {
       if (!caretAtStart(content)) return;
+      if (block.dataset.type === 'calculator' && empty(content)) {
+        event.preventDefault();
+        const row = content.closest('.calculator-row');
+        const rows = [...block.querySelectorAll('.calculator-row')];
+        if (rows.length === 1 && empty(content)) {
+          const paragraph = replace(block, 'paragraph');
+          focus(contentOf(paragraph));
+        } else if (empty(content) && rows.length > 1) {
+          const index = rows.indexOf(row);
+          row.remove();
+          const target = rows[index - 1] || rows[index + 1];
+          focus(target?.querySelector('.calculator-input'), true);
+          recalculate(block);
+          changed();
+        }
+        return;
+      }
       if (block.dataset.exitedContainer) {
         event.preventDefault();
         delete block.dataset.exitedContainer;
@@ -697,6 +710,40 @@
       [...content.childNodes].forEach((node) => previousContent.append(node));
       block.remove();
       focus(previousContent, true);
+      changed();
+    }
+
+
+    function caretAtEnd(content) {
+      const selection = window.getSelection();
+      if (!selection?.isCollapsed || !selection.rangeCount) return false;
+      const range = selection.getRangeAt(0);
+      const after = document.createRange();
+      after.selectNodeContents(content);
+      after.setStart(range.endContainer, range.endOffset);
+      return after.toString() === '';
+    }
+
+    function deleteForward(event, block, content) {
+      if (!caretAtEnd(content)) return;
+      const next = block.nextElementSibling;
+      if (!next?.classList.contains('block')) return;
+      const nextContent = contentOf(next);
+      event.preventDefault();
+      if (!nextContent || next.dataset.type === 'divider') {
+        const range = document.createRange();
+        range.selectNode(next);
+        const selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return;
+      }
+      if (content.innerHTML === '<br>') content.replaceChildren();
+      [...nextContent.childNodes].forEach((node) => content.append(node));
+      const children = childContainer(next, false);
+      if (children) [...children.children].forEach((child) => childContainer(block).append(child));
+      next.remove();
+      focus(content, true);
       changed();
     }
 
@@ -854,17 +901,36 @@
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'a') return false;
       event.preventDefault();
       const selection = window.getSelection();
-      const current = selection.rangeCount ? selection.getRangeAt(0) : null;
-      const contentRange = document.createRange();
-      contentRange.selectNodeContents(content);
-      const alreadySelected = current
-        && current.compareBoundaryPoints(Range.START_TO_START, contentRange) === 0
-        && current.compareBoundaryPoints(Range.END_TO_END, contentRange) === 0;
+      const block = blockFrom(content);
+      const now = Date.now();
+      const consecutive = selectAllState.block === block && now - selectAllState.time <= SELECT_ALL_WINDOW;
+      const stage = consecutive ? Math.min(3, selectAllState.stage + 1) : 1;
+      selectAllState = { block, stage, time: now };
       const range = document.createRange();
-      range.selectNodeContents(alreadySelected ? root : content);
+      if (stage === 1) range.selectNodeContents(content);
+      else if (stage === 2) range.selectNode(block);
+      else range.selectNodeContents(root);
       selection.removeAllRanges();
       selection.addRange(range);
       return true;
+    }
+
+    function escapeSelection(event, block) {
+      event.preventDefault();
+      const selection = window.getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      if (range && range.startContainer === block.parentNode
+        && range.endContainer === block.parentNode
+        && range.endOffset === range.startOffset + 1
+        && block.parentNode.childNodes[range.startOffset] === block) {
+        selection.removeAllRanges();
+        contentOf(block)?.focus();
+        return;
+      }
+      const blockRange = document.createRange();
+      blockRange.selectNode(block);
+      selection.removeAllRanges();
+      selection.addRange(blockRange);
     }
 
     function executeMenuCommand(command, suppliedBlock = null) {
@@ -920,6 +986,7 @@
         return;
       }
       if (selectAll(event, content)) return;
+      if (event.key === 'Escape') { escapeSelection(event, block); return; }
       if ((event.key === 'Backspace' || event.key === 'Delete') && !window.getSelection().isCollapsed) {
         const blocks = selectedBlocks(block);
         if (blocks.length > 1 || window.getSelection().toString() === root.textContent) {
@@ -937,6 +1004,7 @@
       } else if (event.key === 'Enter') enter(event, block, content);
       else if (event.key === 'Tab') tab(event, block);
       else if (event.key === 'Backspace') backspace(event, block, content);
+      else if (event.key === 'Delete') deleteForward(event, block, content);
     }, { capture: true, signal });
 
     root.addEventListener('beforeinput', (event) => {
@@ -947,6 +1015,7 @@
     }, { signal });
 
     root.addEventListener('input', (event) => {
+      selectAllState = { block: null, stage: 0, time: 0 };
       const content = event.target.closest?.('[data-block-content]') || contentOf(currentBlock());
       const block = blockFrom(content);
       if (!content || !block) return;
@@ -1011,6 +1080,7 @@
     }, { signal });
 
     root.addEventListener('pointerdown', (event) => {
+      selectAllState = { block: null, stage: 0, time: 0 };
       const button = event.target.closest?.('[data-drag-handle]');
       if (!button && event.button === 0) {
         const content = event.target.closest?.('[data-block-content]');

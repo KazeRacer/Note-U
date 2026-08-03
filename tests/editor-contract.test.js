@@ -54,6 +54,33 @@ test('slash menu arrow navigation clamps at both ends', () => {
   assert.doesNotMatch(ui, /selectedIndex \+ delta \+ menuState\.items\.length\) %/);
 });
 
+test('slash menu owns both Enter and Tab before the editor keyboard handler', () => {
+  assert.match(ui, /event\.key === 'Enter' \|\| event\.key === 'Tab'/);
+  assert.match(ui, /stopImmediatePropagation\(\)/);
+});
+
+test('calculator row deletion and empty-final-row exit are scoped to rows', () => {
+  assert.match(editor, /rows\.length === 1 && empty\(content\)/);
+  assert.match(editor, /else if \(empty\(content\) && rows\.length > 1\)/);
+  assert.match(editor, /row\.remove\(\)/);
+  assert.match(editor, /empty\(content\) && row === rows\.at\(-1\)/);
+});
+
+test('forward Delete and three-stage select-all are centralized', () => {
+  assert.match(editor, /function deleteForward\(event, block, content\)/);
+  assert.match(editor, /else if \(event\.key === 'Delete'\) deleteForward/);
+  assert.match(editor, /Math\.min\(3, selectAllState\.stage \+ 1\)/);
+  assert.match(editor, /else if \(stage === 2\) range\.selectNode\(block\)/);
+  assert.match(editor, /else range\.selectNodeContents\(root\)/);
+});
+
+test('calculator placeholder is model-state driven transient UI', () => {
+  const css = fs.readFileSync('style.css', 'utf8');
+  assert.match(editor, /classList\.toggle\('is-empty-calculator', rows\.length === 1/);
+  assert.match(css, /\.block\.is-empty-calculator[^\n]+::before/);
+  assert.match(css, /user-select: none/);
+});
+
 test('pointer selection extends native ranges across block editing hosts', () => {
   assert.match(editor, /function caretFromPoint\(x, y\)/);
   assert.match(editor, /function extendPointerSelection\(event\)/);

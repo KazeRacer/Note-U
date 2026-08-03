@@ -555,7 +555,7 @@
         event.preventDefault();
         event.stopImmediatePropagation();
         moveSelection(-1);
-      } else if (event.key === 'Enter') {
+      } else if (event.key === 'Enter' || event.key === 'Tab') {
         event.preventDefault();
         event.stopImmediatePropagation();
         const command = menuState.items[selectedIndex]?.command;

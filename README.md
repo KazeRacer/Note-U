@@ -21,56 +21,51 @@
  ```sh
  npm test
  ```
-+
-+Run JavaScript syntax checks with `npm run check`. The complete repeatable browser
-+acceptance procedure is in [`tests/MANUAL_TEST_PLAN.md`](tests/MANUAL_TEST_PLAN.md).
-+
-+## Editor architecture
-+
-+The editor renders the same hierarchical block tree that `storage.js` serializes.
-+Every block owns an ordered child container (the toggle body is the toggle's child
-+container), so Tab and Shift+Tab move subtrees instead of changing a visual indent
-+number. Legacy flat blocks with indent metadata are converted into this tree only
-+at the load boundary. Pasted multiline plain text becomes one paragraph per line;
-+clipboard HTML is never inserted.
-+
-+The editor root is deliberately not contenteditable. Each block has exactly one
-+explicit editing host, so keyboard and input events always identify the block that
-+owns them instead of depending on browser-specific nested-contenteditable targets.
-+Pointer selection bridges those hosts with the Selection API when a drag crosses a
-+block boundary, preserving ordinary single-block selection, double click, triple
-+click, and the separate lateral-handle gesture used to move block subtrees.
-+
-+Enter after a non-empty heading creates a paragraph. Lists, checklists, quotes and
-+code continue as the same block type on the first Enter; Enter on the resulting
-+empty continuation converts it to a paragraph in the same parent. Ctrl+A/Cmd+A
-+first selects the current block content and the next press selects the complete editor.
-+An empty final paragraph in a toggle exits that toggle only; nested toggles therefore
-+unwind one container at a time. The first Backspace/Delete or Tab immediately after
-+that exit is guarded so it cannot accidentally move focus or re-nest the paragraph.
-+
-+## Merging editor changes
-+
-+Do not resolve editor conflicts by blindly choosing **Accept incoming change** or
-+**Accept current change**. Those labels are relative to the merge operation, not a
-+guarantee that “incoming” is the new editor. Resolve conflicts by retaining the
-+feature branch implementation and integrating any independent changes from
-+`main`, then run the checks below and confirm that `index.html` contains the new
-+application version. Accepting the `main` side for conflicts in `editor.js`,
-+`style.css`, or `index.html` can silently discard the entire editor fix.
-+
-+Runtime assets include the application version in their URL. This cache-busting
-+query ensures GitHub Pages and the browser request the files from the merged
-+release rather than reusing an older editor script.
-+
-+## Sharing titles
-+
-+The Share action passes the current note title, text, and complete URL to the Web
-+Share API. Copy link also places a rich HTML link labelled with the note title on
-+the clipboard while retaining the raw URL as plain text and URI-list data. Static
-+Open Graph metadata remains `Note-U`: URL fragments are not sent to web servers or
-+social preview crawlers, so a GitHub Pages-only app cannot generate per-note Open
-+Graph tags without violating the no-backend constraint.
+Run JavaScript syntax checks with `npm run check`. The complete repeatable browser
+acceptance procedure is in [`tests/MANUAL_TEST_PLAN.md`](tests/MANUAL_TEST_PLAN.md).
+
+## Editor architecture
+
+The editor renders the hierarchical block tree serialized by `storage.js`. Every
+block owns an ordered child container, so structural operations move complete
+subtrees and never synthesize visual indentation. Legacy flat indentation is
+converted only at the load boundary. One capture-phase keyboard dispatcher applies
+the shared Enter, Tab, Backspace and Delete policies; Calculator and code contribute
+explicit behavior without installing competing global listeners.
+
+Each textual block has one stable editing host. Native selection is left untouched
+inside a host; the Selection API extends a pointer selection only after it crosses a
+host boundary. Block dragging starts exclusively on the lateral handle. Ctrl/Cmd+A
+selects the logical editing host, then its outer block and subtree, then the note.
+Code uses its complete buffer as the first logical unit rather than a hard line.
+
+Tab is consistently structural, including in code and Calculator blocks. Shift+Enter
+in code inserts a literal newline; Calculator Enter and Shift+Enter create rows.
+An empty trailing Calculator row exits to a paragraph, while Backspace removes only
+an empty row (or converts a sole empty Calculator to a paragraph).
+
+## Merging editor changes
+
+Do not resolve editor conflicts by blindly choosing **Accept incoming change** or
+**Accept current change**. Those labels are relative to the merge operation, not a
+guarantee that “incoming” is the new editor. Resolve conflicts by retaining the
+feature branch implementation and integrating any independent changes from
+`main`, then run the checks below and confirm that `index.html` contains the new
+application version. Accepting the `main` side for conflicts in `editor.js`,
+`style.css`, or `index.html` can silently discard the entire editor fix.
+
+Runtime assets include the application version in their URL. This cache-busting
+query ensures GitHub Pages and the browser request the files from the merged
+release rather than reusing an older editor script.
+
+## Sharing titles
+
+The Share action passes the current note title, text, and complete URL to the Web
+Share API. Copy link also places a rich HTML link labelled with the note title on
+the clipboard while retaining the raw URL as plain text and URI-list data. Static
+Open Graph metadata remains `Note-U`: URL fragments are not sent to web servers or
+social preview crawlers, so a GitHub Pages-only app cannot generate per-note Open
+Graph tags without violating the no-backend constraint.
 
 ## Calculator blocks
 
