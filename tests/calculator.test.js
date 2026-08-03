@@ -46,3 +46,29 @@ test('formatter hides floating-point artifacts and insertion literals remain par
   assert.equal(calculator.literal(2000), '2000');
   assert.equal(calculator.evaluateExpression(calculator.literal(1 / 3)), 0.333333333333333);
 });
+
+test('European and international formats parse and display deterministically', () => {
+  assert.equal(calculator.evaluateExpression('1,5 + 2', new Map(), 'european'), 3.5);
+  assert.equal(calculator.evaluateExpression('1.5 + 2', new Map(), 'european'), 3.5);
+  assert.equal(calculator.formatResult(1502, 'european'), '1.502');
+  assert.equal(calculator.evaluateExpression('1,500 + 2', new Map(), 'international'), 1502);
+  assert.equal(calculator.evaluateExpression('1,5 + 2', new Map(), 'international'), 3.5);
+  assert.equal(calculator.formatResult(1502, 'international'), '1,502');
+});
+
+test('ambiguous and mixed separators follow the stored format', () => {
+  assert.equal(calculator.parseNumericLiteral('1,234', 'european'), 1.234);
+  assert.equal(calculator.parseNumericLiteral('1,234', 'international'), 1234);
+  assert.equal(calculator.parseNumericLiteral('1.234', 'european'), 1234);
+  assert.equal(calculator.parseNumericLiteral('1.234', 'international'), 1.234);
+  assert.equal(calculator.parseNumericLiteral('0.125', 'european'), 0.125);
+  assert.equal(calculator.parseNumericLiteral('0,125', 'international'), 0.125);
+  assert.equal(calculator.parseNumericLiteral('1.234,56', 'european'), 1234.56);
+  assert.equal(calculator.parseNumericLiteral('1,234.56', 'international'), 1234.56);
+});
+
+test('malformed numeric punctuation is rejected', () => {
+  for (const value of ['12,34,56', '1..5', '1,2.3,4']) {
+    assert.throws(() => calculator.parseNumericLiteral(value, 'european'), /Invalid number/);
+  }
+});

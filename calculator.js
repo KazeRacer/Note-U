@@ -10,23 +10,79 @@
 
   const namePattern = /^[\p{L}_][\p{L}\p{N}_ ]*$/u;
 
-  function tokenize(source, variables = new Map()) {
+  const NUMBER_FORMATS = new Set(['european', 'international']);
+
+  function normalizeNumberFormat(value) {
+    return NUMBER_FORMATS.has(value) ? value : 'international';
+  }
+
+  function parseNumericLiteral(input, numberFormat = 'international') {
+    const format = normalizeNumberFormat(numberFormat);
+    const raw = String(input).trim();
+    const suffix = raw.match(/[km]$/i)?.[0].toLowerCase();
+    const body = suffix ? raw.slice(0, -1) : raw;
+    if (!/^\d[\d., ]*\d$|^\d$/.test(body) || / {2,}/.test(body)) {
+      throw new CalculationError('Invalid number');
+    }
+
+    let compact = body;
+    if (compact.includes(' ')) {
+      if (/[.,]/.test(compact) || !/^\d{1,3}(?: \d{3})+$/.test(compact)) {
+        throw new CalculationError('Invalid number');
+      }
+      compact = compact.replace(/ /g, '');
+    }
+
+    const dots = [...compact.matchAll(/\./g)].map((match) => match.index);
+    const commas = [...compact.matchAll(/,/g)].map((match) => match.index);
+    let normalized = compact;
+    if (dots.length && commas.length) {
+      const decimal = dots.at(-1) > commas.at(-1) ? '.' : ',';
+      const grouping = decimal === '.' ? ',' : '.';
+      if ((decimal === '.' ? dots : commas).length !== 1) throw new CalculationError('Invalid number');
+      const [integer, fraction] = compact.split(decimal);
+      if (!/^\d+$/.test(fraction) || !new RegExp(`^\\d{1,3}(?:\\${grouping}\\d{3})+$`).test(integer)) {
+        throw new CalculationError('Invalid number');
+      }
+      normalized = `${integer.replaceAll(grouping, '')}.${fraction}`;
+    } else if (dots.length || commas.length) {
+      const separator = dots.length ? '.' : ',';
+      const occurrences = dots.length || commas.length;
+      const parts = compact.split(separator);
+      if (occurrences > 1) {
+        if (!/^\d{1,3}$/.test(parts[0]) || parts.slice(1).some((part) => !/^\d{3}$/.test(part))) {
+          throw new CalculationError('Invalid number');
+        }
+        normalized = parts.join('');
+      } else {
+        const [integer, fraction] = parts;
+        if (!integer || !fraction || !/^\d+$/.test(integer + fraction)) throw new CalculationError('Invalid number');
+        const groupingSeparator = format === 'european' ? '.' : ',';
+        normalized = integer !== '0' && fraction.length === 3 && separator === groupingSeparator
+          ? integer + fraction
+          : `${integer}.${fraction}`;
+      }
+    }
+
+    const multiplier = suffix === 'k' ? 1e3 : suffix === 'm' ? 1e6 : 1;
+    const value = Number(normalized) * multiplier;
+    if (!Number.isFinite(value)) throw new CalculationError('Number is too large');
+    return value;
+  }
+
+  function tokenize(source, variables = new Map(), numberFormat = 'international') {
     const tokens = [];
     let index = 0;
     const names = [...variables.keys()].sort((a, b) => b.length - a.length);
     while (index < source.length) {
       if (/\s/.test(source[index])) { index += 1; continue; }
       const rest = source.slice(index);
-      const number = rest.match(/^(?:\d{1,3}(?:,\d{3})+|\d{1,3}(?: \d{3})+|\d+)(?:\.\d+)?(?:[km])?/i);
+      const number = rest.match(/^\d(?:[\d., ]*\d)?(?:[km])?/i);
       if (number) {
         const raw = number[0];
         const boundary = rest[raw.length];
         if (boundary && /[\p{L}\p{N}_.]/u.test(boundary)) throw new CalculationError('Invalid number');
-        let normalized = raw.replace(/[ ,]/g, '');
-        const suffix = normalized.match(/[km]$/i)?.[0].toLowerCase();
-        if (suffix) normalized = normalized.slice(0, -1);
-        let value = Number(normalized) * (suffix === 'k' ? 1e3 : suffix === 'm' ? 1e6 : 1);
-        if (!Number.isFinite(value)) throw new CalculationError('Number is too large');
+        const value = parseNumericLiteral(raw, numberFormat);
         tokens.push({ type: 'number', value });
         index += raw.length;
         continue;
@@ -52,11 +108,11 @@
     return tokens;
   }
 
-  function evaluateExpression(source, variables = new Map()) {
+  function evaluateExpression(source, variables = new Map(), numberFormat = 'international') {
     let normalizedSource = source.trim();
     const descriptive = normalizedSource.match(/^[\p{L}_][\p{L}\p{N}_ ]*\s+(\d[\d ,.]*[km]?)(\s*[+\-]\s*[\p{L}_][\p{L}\p{N}_ ]*\s+\d[\d ,.]*[km]?)+$/iu);
     if (descriptive) normalizedSource = normalizedSource.replace(/[\p{L}_][\p{L}\p{N}_ ]*\s+(?=\d)/gu, '');
-    const tokens = tokenize(normalizedSource, variables);
+    const tokens = tokenize(normalizedSource, variables, numberFormat);
     if (!tokens.length) throw new CalculationError('Incomplete expression', true);
     let position = 0;
     const peek = () => tokens[position];
@@ -123,17 +179,18 @@
     return line.trimEnd();
   }
 
-  function formatResult(value) {
+  function formatResult(value, numberFormat = 'international') {
     if (!Number.isFinite(value)) return '';
     const rounded = Number.parseFloat(value.toPrecision(10));
-    return new Intl.NumberFormat('en-US', { maximumSignificantDigits: 10, useGrouping: true }).format(Object.is(rounded, -0) ? 0 : rounded);
+    const locale = normalizeNumberFormat(numberFormat) === 'european' ? 'de-DE' : 'en-US';
+    return new Intl.NumberFormat(locale, { maximumSignificantDigits: 10, useGrouping: true }).format(Object.is(rounded, -0) ? 0 : rounded);
   }
 
   function literal(value) {
     return String(Number.parseFloat(value.toPrecision(15))).replace(/e\+/, 'e');
   }
 
-  function evaluateBlock(inputLines) {
+  function evaluateBlock(inputLines, numberFormat = 'international') {
     const lines = Array.isArray(inputLines) ? inputLines.map((line) => String(line ?? '')) : [''];
     const variables = new Map();
     const results = [];
@@ -151,7 +208,7 @@
         const values = aggregate === 'subtotal' ? eligible.slice(sectionStart) : eligible;
         const value = values.reduce((sum, row) => sum + row.value, 0);
         const hasErrors = results.some((row, rowIndex) => rowIndex < index && row.error && (aggregate !== 'subtotal' || row.eligibleIndex >= sectionStart));
-        results.push({ kind: aggregate === 'subtotal' ? 'subtotal' : 'total', authored, value, formatted: formatResult(value), literal: literal(value), warning: hasErrors ? 'Some rows contain errors' : '' });
+        results.push({ kind: aggregate === 'subtotal' ? 'subtotal' : 'total', authored, value, formatted: formatResult(value, numberFormat), literal: literal(value), warning: hasErrors ? 'Some rows contain errors' : '' });
         return;
       }
       const assignmentAt = source.indexOf('=');
@@ -165,8 +222,8 @@
         name = source.slice(0, colonAt).trim(); expression = source.slice(colonAt + 1).trim(); kind = 'labeled';
       }
       try {
-        const value = evaluateExpression(expression, variables);
-        const result = { kind, authored, label: name, value, formatted: formatResult(value), literal: literal(value) };
+        const value = evaluateExpression(expression, variables, numberFormat);
+        const result = { kind, authored, label: name, value, formatted: formatResult(value, numberFormat), literal: literal(value) };
         if (kind === 'assignment') variables.set(name.toLocaleLowerCase(), value);
         else { result.eligibleIndex = eligible.length; eligible.push(result); }
         results.push(result);
@@ -177,7 +234,7 @@
     return results;
   }
 
-  const api = Object.freeze({ CalculationError, tokenize, evaluateExpression, evaluateBlock, formatResult, literal, stripComment });
+  const api = Object.freeze({ CalculationError, normalizeNumberFormat, parseNumericLiteral, tokenize, evaluateExpression, evaluateBlock, formatResult, literal, stripComment });
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof window !== 'undefined') window.NoteCalculator = api;
 })();

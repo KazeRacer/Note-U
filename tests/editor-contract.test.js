@@ -54,6 +54,46 @@ test('slash menu arrow navigation clamps at both ends', () => {
   assert.doesNotMatch(ui, /selectedIndex \+ delta \+ menuState\.items\.length\) %/);
 });
 
+test('slash menu owns both Enter and Tab before the editor keyboard handler', () => {
+  assert.match(ui, /event\.key === 'Enter' \|\| event\.key === 'Tab'/);
+  assert.match(ui, /stopImmediatePropagation\(\)/);
+});
+
+test('calculator row deletion and empty-final-row exit are scoped to rows', () => {
+  assert.match(editor, /rows\.length === 1 && empty\(content\)/);
+  assert.match(editor, /function joinCalculatorRows\(block, row, direction\)/);
+  assert.match(editor, /right\.remove\(\)/);
+  assert.match(editor, /empty\(content\) && row === rows\.at\(-1\)/);
+});
+
+test('navigation resolves stable positions and skips collapsed toggle children', () => {
+  assert.match(editor, /function positionFromSelection\(content, affinity/);
+  assert.match(editor, /function adjacentEditablePosition\(position, direction\)/);
+  assert.match(editor, /block\.dataset\.type !== 'toggle' \|\| block\.dataset\.open === 'true'/);
+  assert.match(editor, /function closestCaretAtX\(content, x, fallbackOffset\)/);
+});
+
+test('boundary deletion uses an explicit merge table and outer-block selection', () => {
+  assert.match(editor, /const MERGE_FAMILIES = Object\.freeze/);
+  assert.match(editor, /function isMergeCompatible\(left, right\)/);
+  assert.match(editor, /if \(!mergeAuthoredBlocks\(block, next, content\)\) selectOuterBlock\(next\)/);
+});
+
+test('forward Delete and three-stage select-all are centralized', () => {
+  assert.match(editor, /function deleteForward\(event, block, content\)/);
+  assert.match(editor, /else if \(event\.key === 'Delete'\) deleteForward/);
+  assert.match(editor, /Math\.min\(3, selectAllState\.stage \+ 1\)/);
+  assert.match(editor, /else if \(stage === 2\) \{\s*selectOuterBlock\(block\)/);
+  assert.match(editor, /structuralSelectionMode = 'all';[\s\S]*?range\.selectNodeContents\(root\)/);
+});
+
+test('calculator placeholder is model-state driven transient UI', () => {
+  const css = fs.readFileSync('style.css', 'utf8');
+  assert.match(editor, /classList\.toggle\('is-empty-calculator', rows\.length === 1/);
+  assert.match(css, /\.block\.is-empty-calculator[^\n]+::before/);
+  assert.match(css, /user-select: none/);
+});
+
 test('pointer selection extends native ranges across block editing hosts', () => {
   assert.match(editor, /function caretFromPoint\(x, y\)/);
   assert.match(editor, /function extendPointerSelection\(event\)/);

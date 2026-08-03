@@ -12,6 +12,7 @@
   const copyLinkButton = document.getElementById('copy-link-button');
   const shareNoteButton = document.getElementById('share-note-button');
   const newNoteButton = document.getElementById('new-note-button');
+  const numberFormatSelect = document.getElementById('number-format');
 
   const ICONS = [
     '✏️', '📝', '💡', '📌', '⭐', '🔥',
@@ -26,6 +27,7 @@
   let currentIcon = NoteStorage.DEFAULT_NOTE.icon;
   let saveTimer = null;
   let isLoading = false;
+  let currentNumberFormat = 'international';
 
   function createFaviconUrl(icon) {
     if (!icon) {
@@ -74,6 +76,7 @@
       version: NoteStorage.CURRENT_VERSION,
       title: titleInput.value,
       icon: currentIcon,
+      numberFormat: currentNumberFormat,
       blocks: editor.serialize()
     };
   }
@@ -112,6 +115,9 @@
 
       titleInput.value = normalized.title;
       setIcon(normalized.icon, { save: false });
+      currentNumberFormat = normalized.numberFormat;
+      numberFormatSelect.value = currentNumberFormat;
+      editor.setNumberFormat(currentNumberFormat);
       editor.load(
         normalized.blocks.length
           ? normalized.blocks
@@ -281,6 +287,11 @@
   copyLinkButton.addEventListener('click', copyCurrentLink);
   shareNoteButton.addEventListener('click', shareCurrentNote);
   newNoteButton.addEventListener('click', createNewNote);
+  numberFormatSelect.addEventListener('change', () => {
+    currentNumberFormat = numberFormatSelect.value === 'european' ? 'european' : 'international';
+    editor.setNumberFormat(currentNumberFormat);
+    scheduleSave();
+  });
 
   window.addEventListener('hashchange', () => {
     loadNote(NoteStorage.loadFromHash());
@@ -293,4 +304,5 @@
   window.addEventListener('pagehide', saveNow);
 
   loadNote(NoteStorage.loadFromHash());
+  scheduleSave();
 })();

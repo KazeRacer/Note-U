@@ -72,7 +72,7 @@
       icon: '❝',
       title: 'Quote',
       description: 'Emphasize a passage',
-      keywords: 'blockquote callout quotation'
+      keywords: 'blockquote quotation'
     },
     {
       section: 'Blocks',
@@ -98,7 +98,24 @@
       description: 'Add a horizontal separator',
       keywords: 'line separator rule'
     }
-  ];
+  ].map((item) => {
+    const id = item.command.replace('transform:', '');
+    const aliases = {
+      paragraph: ['text', 'paragraph'],
+      'heading-1': ['h1', 'head 1', 'heading 1'],
+      'heading-2': ['h2', 'head 2', 'heading 2'],
+      'heading-3': ['h3', 'head 3', 'heading 3'],
+      'bulleted-list': ['bullet', 'bulleted'],
+      'numbered-list': ['number', 'num', 'numbered'],
+      checklist: ['todo', 'check', 'checklist'],
+      toggle: ['tog', 'toggle'],
+      quote: ['quo', 'quote'],
+      code: ['code'],
+      calculator: ['calc', 'calculator'],
+      divider: ['divider', 'line']
+    }[id] || [];
+    return Object.freeze({ ...item, id, label: item.title, aliases, keywordTokens: item.keywords.split(/\s+/) });
+  });
 
   const INSERT_ITEMS = TYPE_ITEMS.map((item) => ({
     ...item,
@@ -184,6 +201,23 @@
     }
   ];
 
+  function filterCommandItems(items, query) {
+    const normalizedQuery = query.trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+    if (!normalizedQuery) return items;
+    return items.map((item) => {
+      const labels = [item.label || item.title, ...(item.aliases || [])].map((value) => value.toLocaleLowerCase());
+      const keywords = item.keywordTokens || String(item.keywords || '').toLocaleLowerCase().split(/\s+/);
+      let rank = Infinity;
+      if (labels.includes(normalizedQuery)) rank = 0;
+      else if (labels.some((value) => value.startsWith(normalizedQuery))) rank = 1;
+      else if (keywords.some((value) => value.startsWith(normalizedQuery))) rank = 2;
+      else if (labels.some((value) => value.includes(normalizedQuery))) rank = 3;
+      return { item, rank };
+    }).filter(({ rank }) => Number.isFinite(rank))
+      .sort((left, right) => left.rank - right.rank || left.item.label.localeCompare(right.item.label))
+      .map(({ item }) => item);
+  }
+
   function createUI(options) {
     const {
       menu,
@@ -220,18 +254,7 @@
     }
 
     function filterItems(items, query) {
-      const normalizedQuery = query.trim().toLowerCase();
-      if (!normalizedQuery) return items;
-
-      return items.filter((item) => {
-        const haystack = [
-          item.title,
-          item.description,
-          item.keywords,
-          item.section
-        ].join(' ').toLowerCase();
-        return haystack.includes(normalizedQuery);
-      });
+      return filterCommandItems(items, query);
     }
 
     function renderMenu() {
@@ -334,6 +357,7 @@
     function openMenu(request) {
       hideInlineToolbar();
 
+      const previousQuery = menuState?.query || '';
       const isSameSlashMenu = menuState
         && menuState.mode === 'slash'
         && request.mode === 'slash'
@@ -348,7 +372,7 @@
         items: []
       };
 
-      if (!isSameSlashMenu) selectedIndex = 0;
+      if (!isSameSlashMenu || previousQuery !== menuState.query) selectedIndex = 0;
       menu.hidden = false;
       renderMenu();
       positionMenu();
@@ -555,7 +579,7 @@
         event.preventDefault();
         event.stopImmediatePropagation();
         moveSelection(-1);
-      } else if (event.key === 'Enter') {
+      } else if (event.key === 'Enter' || event.key === 'Tab') {
         event.preventDefault();
         event.stopImmediatePropagation();
         const command = menuState.items[selectedIndex]?.command;
@@ -621,7 +645,7 @@
     });
   }
 
-  window.NoteUI = Object.freeze({
-    create: createUI
-  });
+  const api = Object.freeze({ create: createUI, filterCommandItems, TYPE_ITEMS });
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  if (typeof window !== 'undefined') window.NoteUI = api;
 })();

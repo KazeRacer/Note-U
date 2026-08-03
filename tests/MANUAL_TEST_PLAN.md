@@ -3,8 +3,8 @@
 Serve the repository with `python3 -m http.server 4173`, open the page in a desktop
 browser, keep DevTools Console visible, and repeat the responsive checks at 375 px.
 
-Before interaction, inspect the page source and confirm application version 0.8.0
-and `editor.js?v=0.8.0`; an older value means the new editor is not deployed.
+Before interaction, inspect the page source and confirm application version 0.10.0
+and `editor.js?v=0.10.0`; an older value means the new editor is not deployed.
 
 - Create paragraph, H1, H2, H3, bullet, number, checklist, toggle, quote, code, and
   divider blocks from the slash menu. Filter with `/todo`, `/heading`, `/code`, and
@@ -13,14 +13,15 @@ and `editor.js?v=0.8.0`; an older value means the new editor is not deployed.
   `## `, `### `, `> `, `--- `, and three backticks plus space. Verify ordinary
   mid-line text is unchanged.
 - Verify Enter splits ordinary content; headings create paragraphs; lists,
-  checklists, quotes, and code continue their type once and become paragraphs on
-  the next empty Enter without crossing their parent; toggle Enter focuses a child;
-  and Shift+Enter always creates a soft break.
-- Use Tab and Shift+Tab on one block and a native selection spanning several
-  blocks. Verify tree depth changes one level, order and complete subtrees survive,
-  and Tab/Shift+Tab edit selected code lines rather than nesting the code block.
-- Exercise Backspace at the start and in text. Exercise Delete normally. Press
-  Ctrl+A/Cmd+A twice, delete, and verify one editable paragraph remains. Undo and
+  checklists and quotes continue their type once and become paragraphs on the next
+  empty Enter; toggle Enter focuses a child; code preserves hard newlines; and
+  Shift+Enter creates the documented soft break or special-block newline/row.
+- Use Tab and Shift+Tab on every type and a selection spanning several blocks.
+  Verify tree depth changes one level, order and complete subtrees survive, root
+  outdent is a no-op, and code and Calculator follow the same structural policy.
+- Exercise Backspace at the start and Delete at the end of every type; verify
+  symmetric merges and atomic selection. Press Ctrl+A/Cmd+A three times and verify
+  content, subtree, then whole-note selection; delete and verify one paragraph. Undo and
   redo typing, transforms, nesting, dragging, deletion, and whole-note reset.
 - Drag-select partial text, multiple lines, adjacent blocks, and nested blocks.
   Use context actions for duplicate, delete, move, transform, and clear formatting
@@ -45,6 +46,37 @@ and `editor.js?v=0.8.0`; an older value means the new editor is not deployed.
 - At desktop and 375 px widths, verify controls do not overlap, menus remain inside
   and scroll within the viewport, the URL-only message is centered, and native
   pointer selection works. Finish with zero unexpected Console errors.
+
+- Open `/cal` and apply Calculator with Enter; repeat with Tab and verify Tab does
+  not indent. Repeat `/tog`, `/head 2`, `/num`, and `/check`; Escape closes without
+  conversion, Backspace over the slash closes the menu, and pointer/touch applies.
+- Build a bullet with nested H2, paragraph, to-do, toggle, quote, code, Calculator
+  and divider children. Move the parent by its handle and verify all descendants,
+  IDs, ordering and numbering move together; undo and redo the single operation.
+- Drag from the document gutter and confirm whole blocks, not partial text, are
+  selected. Shift-click a handle for a range and modifier-click to toggle a block.
+- Paste a safe external URL over selected text and verify the label remains; paste
+  unsafe schemes and verify rejection. Paste Calculator/code URLs as plain text.
+  Paste a valid and malformed Note-U URL and verify the current note never crashes.
+- Copy the note link, inspect plain-text and rich clipboard representations, reload
+  it, and verify the tree and authored Calculator rows round-trip. Ordinary address
+  bar copy remains raw; static GitHub Pages cannot promise per-note link previews
+  because URL fragments are not sent to the server.
+- Put the caret on the first/last visual line of paragraph, heading, list, toggle,
+  quote, code and Calculator surfaces. Use all four Arrow keys and Shift+Arrow;
+  verify movement follows visible recursive order, preserves horizontal position,
+  skips results and collapsed children, and never reaches the title or changes data.
+- Place a paragraph before and after Calculator, code, toggle, quote and divider
+  blocks. At every boundary, verify the first Backspace/Delete selects the outer
+  neighbor without changing it and the second key deliberately deletes it; undo
+  must restore the exact subtree.
+- In a three-row Calculator (`10 + 10`, empty, `20 + 20`), join every adjacent pair
+  with Backspace and Delete. Verify only authored row boundaries change, results are
+  recalculated, and surrounding paragraphs remain byte-for-byte unchanged.
+- Switch Number format between `1.234,56` and `1,234.56`; verify decimal comma,
+  decimal point, ambiguous three-digit separators, mixed pasted formats, totals,
+  variables and percentages. Reload the URL and confirm the selected format and
+  results are unchanged; legacy URLs must retain international interpretation.
 
 
 ## Calculator acceptance

@@ -16,6 +16,7 @@
     ['> ', 'toggle']
   ]);
   const URL_PATTERN = /https?:\/\/[^\s<]+/gi;
+  const SELECT_ALL_WINDOW = 1200;
 
   function createEditor(options = {}) {
     const {
@@ -23,7 +24,8 @@
       onChange = () => {},
       onRequestMenu = () => {},
       onCloseMenu = () => {},
-      onSelectionChange = () => {}
+      onSelectionChange = () => {},
+      numberFormat = 'international'
     } = options;
     if (!(root instanceof HTMLElement)) throw new Error('NoteEditor requires a valid root element.');
 
@@ -40,6 +42,10 @@
     let pointerSelection = null;
     let suppressHandleClick = false;
     let skipComposedShortcut = false;
+    let selectAllState = { block: null, stage: 0, time: 0 };
+    let calculatorNumberFormat = numberFormat === 'european' ? 'european' : 'international';
+    let preferredCaretX = null;
+    let structuralSelectionMode = null;
 
     root.contentEditable = 'false';
 
@@ -139,10 +145,14 @@
         marker.className = 'calculator-marker';
         marker.setAttribute('aria-hidden', 'true');
         marker.textContent = 'fx';
-        const lines = Array.isArray(data.lines) ? data.lines : [data.text ?? plainText(data.html || '')];
+        const rows = Array.isArray(data.rows) ? data.rows : null;
+        const lines = rows || (Array.isArray(data.lines) ? data.lines : [data.text ?? plainText(data.html || '')]);
         const list = document.createElement('div');
         list.className = 'calculator-lines';
-        (lines.length ? lines : ['']).forEach((text) => list.append(createCalculatorRow(text)));
+        (lines.length ? lines : ['']).forEach((line) => list.append(createCalculatorRow(
+          typeof line === 'object' ? line.text : line,
+          typeof line === 'object' ? line.id : undefined
+        )));
         sheet.append(marker, list);
         main.append(sheet);
         recalculate(block);
@@ -187,9 +197,10 @@
       return block;
     }
 
-    function createCalculatorRow(text = '') {
+    function createCalculatorRow(text = '', rowId = id()) {
       const row = document.createElement('div');
       row.className = 'calculator-row';
+      row.dataset.rowId = rowId || id();
       const input = document.createElement('div');
       input.className = 'calculator-input';
       input.dataset.blockContent = 'true';
@@ -216,7 +227,8 @@
     function recalculate(block) {
       if (block?.dataset.type !== 'calculator' || !window.NoteCalculator) return;
       const rows = [...block.querySelectorAll(':scope > .block-main .calculator-row')];
-      const results = window.NoteCalculator.evaluateBlock(calculatorLines(block));
+      const results = window.NoteCalculator.evaluateBlock(calculatorLines(block), calculatorNumberFormat);
+      block.classList.toggle('is-empty-calculator', rows.length === 1 && empty(rows[0]?.querySelector('.calculator-input')));
       rows.forEach((row, index) => {
         const result = results[index];
         const input = row.querySelector('.calculator-input');
@@ -247,6 +259,159 @@
       }
       if (block.dataset.type === 'calculator') return block.querySelector(':scope > .block-main .calculator-input');
       return block.querySelector(':scope > .block-main [data-block-content]');
+    }
+
+    function directBlocks(container) {
+      return [...container?.children || []].filter((node) => node.classList?.contains('block'));
+    }
+
+    function visibleEditingSurfaces(container = root, result = []) {
+      directBlocks(container).forEach((block) => {
+        if (block.dataset.type === 'calculator') {
+          block.querySelectorAll(':scope > .block-main .calculator-input').forEach((surface) => result.push(surface));
+        } else {
+          const surface = contentOf(block);
+          if (surface) result.push(surface);
+        }
+        const children = childContainer(block, false);
+        if (children && (block.dataset.type !== 'toggle' || block.dataset.open === 'true')) {
+          visibleEditingSurfaces(children, result);
+        }
+      });
+      return result;
+    }
+
+    function positionFromSelection(content, affinity = 'forward') {
+      const selection = window.getSelection();
+      if (!content || !selection?.rangeCount || !content.contains(selection.anchorNode)) return null;
+      const range = document.createRange();
+      range.selectNodeContents(content);
+      range.setEnd(selection.anchorNode, selection.anchorOffset);
+      const block = blockFrom(content);
+      const row = content.closest('.calculator-row');
+      return {
+        blockId: block?.dataset.blockId || '',
+        surface: row ? 'calculator-row' : block?.dataset.type === 'code' ? 'code' : 'inline',
+        ...(row ? { rowId: row.dataset.rowId } : {}),
+        offset: range.toString().length,
+        affinity,
+        preferredX: preferredCaretX
+      };
+    }
+
+    function adjacentEditablePosition(position, direction) {
+      if (!position?.blockId) return null;
+      const surfaces = visibleEditingSurfaces();
+      const index = surfaces.findIndex((surface) => {
+        const block = blockFrom(surface);
+        const row = surface.closest('.calculator-row');
+        return block?.dataset.blockId === position.blockId && (!position.rowId || row?.dataset.rowId === position.rowId);
+      });
+      const surface = surfaces[index + direction];
+      if (!surface) return null;
+      const block = blockFrom(surface);
+      const row = surface.closest('.calculator-row');
+      return {
+        blockId: block.dataset.blockId,
+        surface: row ? 'calculator-row' : block.dataset.type === 'code' ? 'code' : 'inline',
+        ...(row ? { rowId: row.dataset.rowId } : {}),
+        offset: direction < 0 ? surface.textContent.length : 0,
+        affinity: direction < 0 ? 'backward' : 'forward',
+        preferredX: position.preferredX,
+        element: surface
+      };
+    }
+
+    function caretRect() {
+      const selection = window.getSelection();
+      if (!selection?.rangeCount) return null;
+      const range = selection.getRangeAt(0).cloneRange();
+      range.collapse(true);
+      const rect = range.getClientRects()[0];
+      if (rect) return rect;
+      const marker = document.createElement('span');
+      marker.textContent = '\u200b';
+      range.insertNode(marker);
+      const markerRect = marker.getBoundingClientRect();
+      marker.remove();
+      return markerRect;
+    }
+
+    function visualBoundary(content, direction) {
+      const rect = caretRect();
+      const surfaceRect = content.getBoundingClientRect();
+      if (!rect) return false;
+      const lineHeight = Number.parseFloat(getComputedStyle(content).lineHeight) || 24;
+      return direction < 0
+        ? rect.top <= surfaceRect.top + lineHeight * 0.55
+        : rect.bottom >= surfaceRect.bottom - lineHeight * 0.55;
+    }
+
+    function textPointAtOffset(content, wantedOffset) {
+      const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
+      let remaining = Math.max(0, wantedOffset);
+      while (walker.nextNode()) {
+        if (remaining <= walker.currentNode.data.length) return { node: walker.currentNode, offset: remaining };
+        remaining -= walker.currentNode.data.length;
+      }
+      return { node: content, offset: content.childNodes.length };
+    }
+
+    function closestCaretAtX(content, x, fallbackOffset) {
+      const length = content.textContent.length;
+      if (!length) return textPointAtOffset(content, 0);
+      let best = textPointAtOffset(content, fallbackOffset);
+      let distance = Infinity;
+      for (let offset = 0; offset <= length; offset += 1) {
+        const point = textPointAtOffset(content, offset);
+        const probe = document.createRange();
+        probe.setStart(point.node, point.offset);
+        probe.collapse(true);
+        const rect = probe.getClientRects()[0];
+        if (rect && Math.abs(rect.left - x) < distance) {
+          best = point;
+          distance = Math.abs(rect.left - x);
+        }
+      }
+      return best;
+    }
+
+    function verticalArrow(event, block, content) {
+      if (event.altKey || event.ctrlKey || event.metaKey || !window.getSelection()?.isCollapsed) return false;
+      const direction = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+      if (!direction || !visualBoundary(content, direction)) return false;
+      const rect = caretRect();
+      const position = positionFromSelection(content, direction < 0 ? 'backward' : 'forward');
+      preferredCaretX ??= rect?.left ?? content.getBoundingClientRect().left;
+      position.preferredX = preferredCaretX;
+      const target = adjacentEditablePosition(position, direction);
+      if (!target) return false;
+      event.preventDefault();
+      const point = closestCaretAtX(target.element, preferredCaretX, target.offset);
+      const selection = window.getSelection();
+      if (event.shiftKey && selection.extend) selection.extend(point.node, point.offset);
+      else {
+        const range = document.createRange();
+        range.setStart(point.node, point.offset);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      target.element.focus({ preventScroll: true });
+      target.element.scrollIntoView({ block: 'nearest' });
+      return true;
+    }
+
+    function horizontalArrow(event, content) {
+      if (!window.getSelection()?.isCollapsed || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return false;
+      const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
+      if (!direction || (direction < 0 ? !caretAtStart(content) : !caretAtEnd(content))) return false;
+      const position = positionFromSelection(content, direction < 0 ? 'backward' : 'forward');
+      const target = adjacentEditablePosition(position, direction);
+      if (!target) return false;
+      event.preventDefault();
+      focus(target.element, direction < 0);
+      return true;
     }
 
     function blockFrom(node) {
@@ -372,6 +537,10 @@
       const content = contentOf(block);
       if (type === 'calculator') {
         result.lines = calculatorLines(block);
+        result.rows = [...block.querySelectorAll(':scope > .block-main .calculator-row')].map((row) => ({
+          id: row.dataset.rowId,
+          text: row.querySelector('.calculator-input')?.textContent || ''
+        }));
       } else if (type === 'code') {
         if (content.textContent) result.text = content.textContent;
       } else if (type !== 'divider') {
@@ -491,6 +660,7 @@
         html,
         text: target === 'code' ? (oldType === 'calculator' ? calculatorText : content?.textContent || plainText(html)) : undefined,
         lines: target === 'calculator' ? (oldType === 'calculator' ? calculatorLines(block) : [content?.textContent || plainText(html)]) : undefined,
+        rows: target === 'calculator' && oldType === 'calculator' ? serializeBlock(block).rows : undefined,
         titleStyle: data.titleStyle || (HEADING_TYPES.has(oldType) ? oldType : 'paragraph'),
         children: target === 'toggle' ? children : children
       });
@@ -552,10 +722,34 @@
           return;
         }
         const row = content.closest('.calculator-row');
+        const rows = [...block.querySelectorAll('.calculator-row')];
+        if (!event.shiftKey && empty(content) && row === rows.at(-1)) {
+          const paragraph = createBlock('paragraph');
+          row.remove();
+          block.insertAdjacentElement('afterend', paragraph);
+          focus(contentOf(paragraph));
+          changed();
+          return;
+        }
         const next = createCalculatorRow('');
         row.insertAdjacentElement('afterend', next);
         focus(next.querySelector('.calculator-input'));
         recalculate(block);
+        changed();
+        return;
+      }
+      if (block.dataset.type === 'code') {
+        const atEnd = caretAtEnd(content);
+        if (!event.shiftKey && atEnd && (content.textContent || '').endsWith('\n')) {
+          content.textContent = content.textContent.slice(0, -1);
+          if (!content.textContent) content.append(document.createElement('br'));
+          const paragraph = createBlock('paragraph');
+          block.insertAdjacentElement('afterend', paragraph);
+          focus(contentOf(paragraph));
+          changed();
+          return;
+        }
+        insertText('\n');
         changed();
         return;
       }
@@ -635,22 +829,6 @@
         delete block.dataset.exitedContainer;
         return;
       }
-      if (block.dataset.type === 'code' && window.getSelection().isCollapsed) {
-        if (event.shiftKey) {
-          const selection = window.getSelection();
-          const range = selection.getRangeAt(0);
-          const content = contentOf(block);
-          const before = document.createRange();
-          before.selectNodeContents(content);
-          before.setEnd(range.startContainer, range.startOffset);
-          if (before.toString().endsWith('  ') && range.startContainer.nodeType === Node.TEXT_NODE) {
-            range.setStart(range.startContainer, Math.max(0, range.startOffset - 2));
-            range.deleteContents();
-          }
-        } else insertText('  ');
-        changed();
-        return;
-      }
       const blocks = selectedBlocks(block);
       const moved = event.shiftKey ? outdent(blocks) : indent(blocks);
       if (moved) changed();
@@ -666,8 +844,168 @@
       return before.toString() === '';
     }
 
+    const MERGE_FAMILIES = Object.freeze({
+      paragraph: 'rich-text',
+      'heading-1': 'rich-text',
+      'heading-2': 'rich-text',
+      'heading-3': 'rich-text',
+      'bulleted-list': 'bulleted-list',
+      'numbered-list': 'numbered-list',
+      checklist: 'checklist'
+    });
+
+    function siblingBlock(block, direction) {
+      const siblings = directBlocks(block?.parentElement);
+      const index = siblings.findIndex((item) => item.dataset.blockId === block?.dataset.blockId);
+      return index < 0 ? null : siblings[index + direction] || null;
+    }
+
+    function isMergeCompatible(left, right) {
+      if (!left || !right || left.parentElement !== right.parentElement) return false;
+      const leftFamily = MERGE_FAMILIES[left.dataset.type];
+      const rightFamily = MERGE_FAMILIES[right.dataset.type];
+      return Boolean(leftFamily && leftFamily === rightFamily);
+    }
+
+    function selectOuterBlock(block) {
+      if (!block) return;
+      root.querySelectorAll('.is-structurally-selected').forEach((item) => item.classList.remove('is-structurally-selected'));
+      const range = document.createRange();
+      range.selectNode(block);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      block.classList.add('is-structurally-selected');
+      structuralSelectionMode = 'block';
+    }
+
+    function structurallySelectedBlock() {
+      const selected = root.querySelector('.block.is-structurally-selected');
+      const selection = window.getSelection();
+      if (!selected || !selection?.rangeCount) return null;
+      const range = selection.getRangeAt(0);
+      return range.startContainer === selected.parentNode
+        && range.endContainer === selected.parentNode
+        && range.endOffset === range.startOffset + 1
+        && selected.parentNode.childNodes[range.startOffset] === selected
+        ? selected
+        : null;
+    }
+
+    function mergeAuthoredBlocks(left, right, caretContent) {
+      const leftContent = contentOf(left);
+      const rightContent = contentOf(right);
+      if (!leftContent || !rightContent || !isMergeCompatible(left, right)) return false;
+      const joinOffset = leftContent.textContent.length;
+      if (leftContent.innerHTML === '<br>') leftContent.replaceChildren();
+      [...rightContent.childNodes].forEach((node) => leftContent.append(node));
+      const children = childContainer(right, false);
+      if (children) [...children.children].forEach((child) => childContainer(left).append(child));
+      right.remove();
+      const point = textPointAtOffset(leftContent, joinOffset);
+      const range = document.createRange();
+      range.setStart(point.node, point.offset);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      (caretContent || leftContent).focus();
+      changed();
+      return true;
+    }
+
+    function joinCalculatorRows(block, row, direction) {
+      const rows = [...block.querySelectorAll(':scope > .block-main .calculator-row')];
+      const index = rows.findIndex((item) => item.dataset.rowId === row?.dataset.rowId);
+      const left = direction < 0 ? rows[index - 1] : rows[index];
+      const right = direction < 0 ? rows[index] : rows[index + 1];
+      if (!left || !right) return false;
+      const leftInput = left.querySelector('.calculator-input');
+      const rightInput = right.querySelector('.calculator-input');
+      const joinOffset = leftInput.textContent.length;
+      const joined = leftInput.textContent + rightInput.textContent;
+      leftInput.textContent = joined;
+      if (!joined) leftInput.append(document.createElement('br'));
+      right.remove();
+      const point = textPointAtOffset(leftInput, joinOffset);
+      const range = document.createRange();
+      range.setStart(point.node, point.offset);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      leftInput.focus();
+      recalculate(block);
+      changed();
+      return true;
+    }
+
+    function deleteAuthoredSelection() {
+      const selection = window.getSelection();
+      if (!selection?.rangeCount || selection.isCollapsed) return false;
+      const sourceRange = selection.getRangeAt(0);
+      const surfaces = visibleEditingSurfaces().filter((surface) => {
+        try { return sourceRange.intersectsNode(surface); } catch { return false; }
+      });
+      if (!surfaces.length) return false;
+      const first = surfaces[0];
+      const last = surfaces.at(-1);
+      const restoreOffset = first.contains(sourceRange.startContainer)
+        ? positionFromRangeBoundary(first, sourceRange.startContainer, sourceRange.startOffset)
+        : 0;
+      [...surfaces].reverse().forEach((surface) => {
+        const range = document.createRange();
+        range.selectNodeContents(surface);
+        if (surface === first && first.contains(sourceRange.startContainer)) {
+          range.setStart(sourceRange.startContainer, sourceRange.startOffset);
+        }
+        if (surface === last && last.contains(sourceRange.endContainer)) {
+          range.setEnd(sourceRange.endContainer, sourceRange.endOffset);
+        }
+        range.deleteContents();
+        if (!surface.textContent && !surface.querySelector('br')) surface.append(document.createElement('br'));
+      });
+      const point = textPointAtOffset(first, restoreOffset);
+      const caret = document.createRange();
+      caret.setStart(point.node, point.offset);
+      caret.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(caret);
+      first.focus();
+      const calculators = new Set(surfaces.map(blockFrom).filter((block) => block?.dataset.type === 'calculator'));
+      calculators.forEach(recalculate);
+      changed();
+      return true;
+    }
+
+    function positionFromRangeBoundary(content, node, offset) {
+      const range = document.createRange();
+      range.selectNodeContents(content);
+      range.setEnd(node, offset);
+      return range.toString().length;
+    }
+
     function backspace(event, block, content) {
       if (!caretAtStart(content)) return;
+      if (block.dataset.type === 'calculator') {
+        const row = content.closest('.calculator-row');
+        const rows = [...block.querySelectorAll('.calculator-row')];
+        if (rows.length === 1 && empty(content)) {
+          event.preventDefault();
+          const paragraph = replace(block, 'paragraph');
+          focus(contentOf(paragraph));
+        } else if (rows.indexOf(row) > 0) {
+          event.preventDefault();
+          joinCalculatorRows(block, row, -1);
+        } else {
+          const previous = siblingBlock(block, -1);
+          if (previous) {
+            event.preventDefault();
+            selectOuterBlock(previous);
+          }
+        }
+        return;
+      }
       if (block.dataset.exitedContainer) {
         event.preventDefault();
         delete block.dataset.exitedContainer;
@@ -681,23 +1019,50 @@
         changed();
         return;
       }
-      if (block.dataset.type !== 'paragraph') {
+      if (block.dataset.type !== 'paragraph' && empty(content)) {
         event.preventDefault();
         const paragraph = replace(block, 'paragraph');
         focus(contentOf(paragraph));
         return;
       }
-      const previous = block.previousElementSibling;
-      if (!previous?.classList.contains('block')) return;
-      const previousContent = contentOf(previous);
-      if (!previousContent || previous.dataset.type === 'divider') return;
+      const previous = siblingBlock(block, -1);
+      if (!previous) return;
       event.preventDefault();
-      const offset = previousContent.textContent.length;
-      if (previousContent.innerHTML === '<br>') previousContent.replaceChildren();
-      [...content.childNodes].forEach((node) => previousContent.append(node));
-      block.remove();
-      focus(previousContent, true);
-      changed();
+      if (!mergeAuthoredBlocks(previous, block, content)) selectOuterBlock(previous);
+    }
+
+
+    function caretAtEnd(content) {
+      const selection = window.getSelection();
+      if (!selection?.isCollapsed || !selection.rangeCount) return false;
+      const range = selection.getRangeAt(0);
+      const after = document.createRange();
+      after.selectNodeContents(content);
+      after.setStart(range.endContainer, range.endOffset);
+      return after.toString() === '';
+    }
+
+    function deleteForward(event, block, content) {
+      if (!caretAtEnd(content)) return;
+      if (block.dataset.type === 'calculator') {
+        const row = content.closest('.calculator-row');
+        const rows = [...block.querySelectorAll('.calculator-row')];
+        if (rows.indexOf(row) < rows.length - 1) {
+          event.preventDefault();
+          joinCalculatorRows(block, row, 1);
+        } else {
+          const next = siblingBlock(block, 1);
+          if (next) {
+            event.preventDefault();
+            selectOuterBlock(next);
+          }
+        }
+        return;
+      }
+      const next = siblingBlock(block, 1);
+      if (!next) return;
+      event.preventDefault();
+      if (!mergeAuthoredBlocks(block, next, content)) selectOuterBlock(next);
     }
 
     function normalizedText(content) {
@@ -854,17 +1219,41 @@
       if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== 'a') return false;
       event.preventDefault();
       const selection = window.getSelection();
-      const current = selection.rangeCount ? selection.getRangeAt(0) : null;
-      const contentRange = document.createRange();
-      contentRange.selectNodeContents(content);
-      const alreadySelected = current
-        && current.compareBoundaryPoints(Range.START_TO_START, contentRange) === 0
-        && current.compareBoundaryPoints(Range.END_TO_END, contentRange) === 0;
+      const block = blockFrom(content);
+      const now = Date.now();
+      const consecutive = selectAllState.block === block && now - selectAllState.time <= SELECT_ALL_WINDOW;
+      const stage = consecutive ? Math.min(3, selectAllState.stage + 1) : 1;
+      selectAllState = { block, stage, time: now };
       const range = document.createRange();
-      range.selectNodeContents(alreadySelected ? root : content);
+      if (stage === 1) range.selectNodeContents(content);
+      else if (stage === 2) {
+        selectOuterBlock(block);
+        return true;
+      } else {
+        structuralSelectionMode = 'all';
+        root.querySelectorAll('.is-structurally-selected').forEach((item) => item.classList.remove('is-structurally-selected'));
+        range.selectNodeContents(root);
+      }
       selection.removeAllRanges();
       selection.addRange(range);
       return true;
+    }
+
+    function escapeSelection(event, block) {
+      event.preventDefault();
+      const selection = window.getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      if (range && range.startContainer === block.parentNode
+        && range.endContainer === block.parentNode
+        && range.endOffset === range.startOffset + 1
+        && block.parentNode.childNodes[range.startOffset] === block) {
+        selection.removeAllRanges();
+        block.classList.remove('is-structurally-selected');
+        structuralSelectionMode = null;
+        contentOf(block)?.focus();
+        return;
+      }
+      selectOuterBlock(block);
     }
 
     function executeMenuCommand(command, suppliedBlock = null) {
@@ -914,22 +1303,38 @@
       const content = event.target.closest?.('[data-block-content]');
       const block = blockFrom(content);
       if (!block || !content) return;
+      if (event.isComposing || event.key === 'Process') return;
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') preferredCaretX = null;
+      const structural = structurallySelectedBlock();
+      if (structuralSelectionMode === 'all' && (event.key === 'Backspace' || event.key === 'Delete')) {
+        event.preventDefault();
+        root.replaceChildren(createBlock('paragraph'));
+        structuralSelectionMode = null;
+        focus(contentOf(root.firstElementChild));
+        changed();
+        return;
+      }
+      if (structural && (event.key === 'Backspace' || event.key === 'Delete')) {
+        event.preventDefault();
+        structural.remove();
+        ensureEditor();
+        focus(contentOf(root.querySelector('.block')), true);
+        changed();
+        return;
+      }
       if ((event.key === 'Backspace' || event.key === 'Delete') && block.dataset.exitedContainer) {
         event.preventDefault();
         delete block.dataset.exitedContainer;
         return;
       }
       if (selectAll(event, content)) return;
+      if (event.key === 'Escape') { escapeSelection(event, block); return; }
+      if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && verticalArrow(event, block, content)) return;
+      if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && horizontalArrow(event, content)) return;
       if ((event.key === 'Backspace' || event.key === 'Delete') && !window.getSelection().isCollapsed) {
-        const blocks = selectedBlocks(block);
-        if (blocks.length > 1 || window.getSelection().toString() === root.textContent) {
-          event.preventDefault();
-          blocks.forEach((item) => item.remove());
-          ensureEditor();
-          focus(contentOf(root.querySelector('.block')));
-          changed();
-          return;
-        }
+        event.preventDefault();
+        deleteAuthoredSelection();
+        return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault();
@@ -937,6 +1342,7 @@
       } else if (event.key === 'Enter') enter(event, block, content);
       else if (event.key === 'Tab') tab(event, block);
       else if (event.key === 'Backspace') backspace(event, block, content);
+      else if (event.key === 'Delete') deleteForward(event, block, content);
     }, { capture: true, signal });
 
     root.addEventListener('beforeinput', (event) => {
@@ -947,6 +1353,8 @@
     }, { signal });
 
     root.addEventListener('input', (event) => {
+      selectAllState = { block: null, stage: 0, time: 0 };
+      structuralSelectionMode = null;
       const content = event.target.closest?.('[data-block-content]') || contentOf(currentBlock());
       const block = blockFrom(content);
       if (!content || !block) return;
@@ -1011,6 +1419,9 @@
     }, { signal });
 
     root.addEventListener('pointerdown', (event) => {
+      selectAllState = { block: null, stage: 0, time: 0 };
+      structuralSelectionMode = null;
+      root.querySelectorAll('.is-structurally-selected').forEach((item) => item.classList.remove('is-structurally-selected'));
       const button = event.target.closest?.('[data-drag-handle]');
       if (!button && event.button === 0) {
         const content = event.target.closest?.('[data-block-content]');
@@ -1103,6 +1514,10 @@
       deleteBlock: deleteBlocks,
       moveBlock: moveBlocks,
       executeMenuCommand,
+      setNumberFormat(value) {
+        calculatorNumberFormat = value === 'european' ? 'european' : 'international';
+        root.querySelectorAll('.block[data-type="calculator"]').forEach(recalculate);
+      },
       readableLinkLabel(value) { return value; },
       destroy() { controller.abort(); }
     });
