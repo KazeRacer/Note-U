@@ -8,11 +8,19 @@
   const favicon = document.getElementById('favicon');
   const blockMenu = document.getElementById('block-menu');
   const inlineToolbar = document.getElementById('inline-toolbar');
+  const linkChip = document.getElementById('link-chip');
+  const mobileBar = document.getElementById('mobile-bar');
   const toast = document.getElementById('toast');
   const copyLinkButton = document.getElementById('copy-link-button');
   const shareNoteButton = document.getElementById('share-note-button');
   const newNoteButton = document.getElementById('new-note-button');
+  const moreButton = document.getElementById('more-button');
+  const moreMenu = document.getElementById('more-menu');
+  const copyMarkdownButton = document.getElementById('copy-markdown-button');
   const numberFormatSelect = document.getElementById('number-format');
+  const statsElement = document.getElementById('stats');
+
+  const t = NoteUI.t;
 
   const ICONS = [
     '✏️', '📝', '💡', '📌', '⭐', '🔥',
@@ -22,10 +30,15 @@
     '⬆️', '⬇️', '➡️', '⬅️', '•', ''
   ];
 
+  // Links longer than this are likely to be truncated by some messengers and mail clients.
+  const LONG_LINK_LENGTH = 8000;
+
   let editor = null;
   let ui = null;
   let currentIcon = NoteStorage.DEFAULT_NOTE.icon;
   let saveTimer = null;
+  let statsTimer = null;
+  let saveSequence = 0;
   let isLoading = false;
   let currentNumberFormat = 'international';
 
@@ -55,8 +68,8 @@
     iconButton.setAttribute(
       'aria-label',
       currentIcon
-        ? 'Change note icon'
-        : 'Change note icon (currently empty)'
+        ? t('Change note icon')
+        : `${t('Change note icon')} (–)`
     );
 
     favicon.href = createFaviconUrl(currentIcon);
@@ -68,7 +81,7 @@
 
   function updateDocumentTitle() {
     const title = titleInput.value.trim();
-    document.title = title || 'Untitled';
+    document.title = title || t('Untitled');
   }
 
   function readCurrentNote() {
@@ -81,7 +94,41 @@
     };
   }
 
-  function saveNow() {
+  // ---------------------------------------------------------------- Counter
+  function updateStats() {
+    window.clearTimeout(statsTimer);
+    statsTimer = null;
+    if (!editor || !statsElement) return;
+
+    const body = editor.getStats();
+    const title = NoteEditor.countText(titleInput.value);
+    const total = {
+      words: body.words + title.words,
+      characters: body.characters + title.characters,
+      charactersNoSpaces: body.charactersNoSpaces + title.charactersNoSpaces
+    };
+    const selection = editor.getSelectionStats();
+    const shown = selection || total;
+    const linkLength = window.location.href.length;
+
+    statsElement.textContent = selection
+      ? `${t('Selection')}: ${NoteUI.formatStats(selection)}`
+      : NoteUI.formatStats(total);
+    statsElement.classList.toggle('is-long-link', linkLength > LONG_LINK_LENGTH);
+    statsElement.title = [
+      `${t('Characters without spaces')}: ${shown.charactersNoSpaces}`,
+      `${t('Link length')}: ${linkLength.toLocaleString()}`,
+      linkLength > LONG_LINK_LENGTH ? t('Long links may be cut off by some apps') : ''
+    ].filter(Boolean).join('\n');
+  }
+
+  function scheduleStats() {
+    if (statsTimer) return;
+    statsTimer = window.setTimeout(updateStats, 120);
+  }
+
+  // ---------------------------------------------------------------- Persistence
+  async function saveNow() {
     window.clearTimeout(saveTimer);
     saveTimer = null;
 
@@ -89,12 +136,31 @@
       return;
     }
 
+    const sequence = ++saveSequence;
+
     try {
-      NoteStorage.writeToUrl(readCurrentNote(), { replace: true });
+      const encoded = await NoteStorage.encodeNoteAsync(readCurrentNote());
+      // A newer edit started another save while this one was compressing.
+      if (sequence !== saveSequence) return;
+      NoteStorage.writeEncodedToUrl(encoded, { replace: true });
       updateDocumentTitle();
+      scheduleStats();
     } catch (error) {
       console.error('Unable to save the note in the URL.', error);
-      ui?.showToast('This note is too large to save in the URL.');
+      ui?.showToast(t('This note is too large to save in the URL.'));
+    }
+  }
+
+  // Used when the page is going away: compression is asynchronous, so write the plain format.
+  function saveSynchronously() {
+    window.clearTimeout(saveTimer);
+    saveTimer = null;
+    if (isLoading || !editor) return;
+    saveSequence += 1;
+    try {
+      NoteStorage.writeToUrl(readCurrentNote(), { replace: true });
+    } catch (error) {
+      console.error('Unable to save the note in the URL.', error);
     }
   }
 
@@ -107,13 +173,15 @@
     saveTimer = window.setTimeout(saveNow, 90);
   }
 
-  function loadNote(note) {
+  function loadNote(note, options = {}) {
     isLoading = true;
 
     try {
       const normalized = NoteStorage.normalizeNote(note);
 
-      titleInput.value = normalized.title;
+      titleInput.value = options.fresh && normalized.title === NoteStorage.DEFAULT_NOTE.title
+        ? t('Note')
+        : normalized.title;
       setIcon(normalized.icon, { save: false });
       currentNumberFormat = normalized.numberFormat;
       numberFormatSelect.value = currentNumberFormat;
@@ -127,13 +195,40 @@
     } finally {
       isLoading = false;
     }
+    updateStats();
+  }
+
+  async function loadFromLocation(options = {}) {
+    loadNote(await NoteStorage.loadFromHashAsync(), options);
+  }
+
+  // ---------------------------------------------------------------- Sharing
+  async function writeTextToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      const temporaryInput = document.createElement('textarea');
+
+      temporaryInput.value = text;
+      temporaryInput.style.position = 'fixed';
+      temporaryInput.style.opacity = '0';
+
+      document.body.append(temporaryInput);
+      temporaryInput.select();
+
+      const copied = document.execCommand('copy');
+
+      temporaryInput.remove();
+      return copied;
+    }
   }
 
   async function copyCurrentLink() {
-    saveNow();
+    await saveNow();
 
     try {
-      const title = titleInput.value.trim() || 'Untitled';
+      const title = titleInput.value.trim() || t('Untitled');
 
       if (navigator.clipboard.write && window.ClipboardItem) {
         const safeTitle = title
@@ -163,41 +258,25 @@
             )
           })
         ]);
-      } else {
-        await navigator.clipboard.writeText(window.location.href);
+        ui.showToast(t('Link copied'));
+        return;
       }
-
-      ui.showToast('Link copied');
     } catch {
-      const temporaryInput = document.createElement('textarea');
-
-      temporaryInput.value = window.location.href;
-      temporaryInput.style.position = 'fixed';
-      temporaryInput.style.opacity = '0';
-
-      document.body.append(temporaryInput);
-      temporaryInput.select();
-
-      const copied = document.execCommand('copy');
-
-      temporaryInput.remove();
-
-      ui.showToast(
-        copied
-          ? 'Link copied'
-          : 'Unable to copy the link'
-      );
+      // Fall through to the plain-text clipboard path below.
     }
+
+    const copied = await writeTextToClipboard(window.location.href);
+    ui.showToast(copied ? t('Link copied') : t('Unable to copy the link'));
   }
 
   async function shareCurrentNote() {
-    saveNow();
+    await saveNow();
 
-    const title = titleInput.value.trim() || 'Untitled';
+    const title = titleInput.value.trim() || t('Untitled');
 
     if (!navigator.share) {
       await copyCurrentLink();
-      ui.showToast('Sharing is unavailable; link copied');
+      ui.showToast(t('Sharing is unavailable; link copied'));
       return;
     }
 
@@ -210,14 +289,22 @@
     } catch (error) {
       if (error?.name !== 'AbortError') {
         console.error('Unable to share the note.', error);
-        ui.showToast('Unable to share this note');
+        ui.showToast(t('Unable to share this note'));
       }
     }
   }
 
+  async function copyMarkdown() {
+    const title = titleInput.value.trim();
+    const body = NoteMarkdown.toMarkdown(editor.serialize());
+    const markdown = title ? `# ${title}\n\n${body}` : body;
+    const copied = await writeTextToClipboard(markdown);
+    ui.showToast(copied ? t('Markdown copied') : t('Unable to copy'));
+  }
+
   function createNewNote() {
     // Keep the current note URL intact and open a clean note in a separate tab.
-    saveNow();
+    saveSynchronously();
 
     const newNoteUrl = new URL(window.location.href);
     newNoteUrl.hash = '';
@@ -233,6 +320,13 @@
     link.remove();
   }
 
+  // ---------------------------------------------------------------- "More" menu
+  function setMoreMenuOpen(open) {
+    moreMenu.hidden = !open;
+    moreButton.setAttribute('aria-expanded', String(open));
+  }
+
+  // ---------------------------------------------------------------- Wiring
   ui = NoteUI.create({
     menu: blockMenu,
     inlineToolbar,
@@ -240,17 +334,36 @@
     iconButton,
     iconPicker,
     editorRoot,
+    linkChip,
+    mobileBar,
 
     executeEditorCommand(command, block) {
       editor.executeMenuCommand(command, block);
+    },
+
+    applyInlineCommand(command) {
+      return command === 'link' ? editor.linkCommand() : editor.formatInline(command);
+    },
+
+    runMobileCommand(command) {
+      if (command === 'block') editor.openBlockPicker();
+      else if (command === 'undo') editor.undo();
+      else if (command === 'redo') editor.redo();
+      else if (command === 'indent') editor.indentSelection(false);
+      else if (command === 'outdent') editor.indentSelection(true);
+      else if (command === 'link') editor.linkCommand();
+      else editor.formatInline(command);
     }
   });
 
   editor = NoteEditor.create({
     root: editorRoot,
+    localize: t,
+    notify: (message) => ui.showToast(message),
 
     onChange() {
       scheduleSave();
+      scheduleStats();
     },
 
     onRequestMenu(request) {
@@ -263,8 +376,15 @@
 
     onSelectionChange(selection) {
       ui.updateInlineToolbar(selection);
+      scheduleStats();
     }
   });
+
+  NoteUI.applyTranslations();
+  titleInput.placeholder = t('Untitled');
+  editorRoot.dataset.placeholder = t('Type \'/\' for commands');
+  document.documentElement.style.setProperty('--calc-placeholder', JSON.stringify(t('Type a calculation…')));
+  document.documentElement.style.setProperty('--toggle-empty', JSON.stringify(t('Empty toggle. Click to add content.')));
 
   ui.initializeIconPicker(ICONS, (icon) => {
     setIcon(icon);
@@ -273,6 +393,7 @@
   titleInput.addEventListener('input', () => {
     updateDocumentTitle();
     scheduleSave();
+    scheduleStats();
   });
 
   titleInput.addEventListener('keydown', (event) => {
@@ -287,22 +408,47 @@
   copyLinkButton.addEventListener('click', copyCurrentLink);
   shareNoteButton.addEventListener('click', shareCurrentNote);
   newNoteButton.addEventListener('click', createNewNote);
+  copyMarkdownButton.addEventListener('click', () => {
+    setMoreMenuOpen(false);
+    copyMarkdown();
+  });
+  moreButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    setMoreMenuOpen(moreMenu.hidden);
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!moreMenu.hidden && !moreMenu.contains(event.target) && event.target !== moreButton) {
+      setMoreMenuOpen(false);
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !moreMenu.hidden) {
+      setMoreMenuOpen(false);
+      moreButton.focus();
+    }
+  });
   numberFormatSelect.addEventListener('change', () => {
     currentNumberFormat = numberFormatSelect.value === 'european' ? 'european' : 'international';
     editor.setNumberFormat(currentNumberFormat);
     scheduleSave();
   });
 
+  if (!navigator.share) {
+    // Desktop browsers without the Web Share API fall back to copying, so the button is redundant.
+    shareNoteButton.hidden = true;
+  }
+
   window.addEventListener('hashchange', () => {
-    loadNote(NoteStorage.loadFromHash());
+    loadFromLocation();
   });
 
   window.addEventListener('popstate', () => {
-    loadNote(NoteStorage.loadFromHash());
+    loadFromLocation();
   });
 
-  window.addEventListener('pagehide', saveNow);
+  window.addEventListener('pagehide', saveSynchronously);
 
-  loadNote(NoteStorage.loadFromHash());
-  scheduleSave();
+  loadFromLocation({ fresh: !window.location.hash }).then(() => {
+    scheduleSave();
+  });
 })();

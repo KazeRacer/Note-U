@@ -75,7 +75,7 @@
     let index = 0;
     const names = [...variables.keys()].sort((a, b) => b.length - a.length);
     while (index < source.length) {
-      if (/\s/.test(source[index])) { index += 1; continue; }
+      if (/[\s€$£]/.test(source[index])) { index += 1; continue; }
       const rest = source.slice(index);
       const number = rest.match(/^\d(?:[\d., ]*\d)?(?:[km])?/i);
       if (number) {
@@ -85,6 +85,12 @@
         const value = parseNumericLiteral(raw, numberFormat);
         tokens.push({ type: 'number', value });
         index += raw.length;
+        continue;
+      }
+      const fn = rest.match(/^(sqrt|abs|round|floor|ceil)\s*(?=\()/i)?.[1];
+      if (fn) {
+        tokens.push({ type: 'function', value: fn.toLowerCase() });
+        index += rest.match(/^[a-z]+\s*/i)[0].length;
         continue;
       }
       const lowerRest = rest.toLocaleLowerCase();
@@ -109,7 +115,7 @@
   }
 
   function evaluateExpression(source, variables = new Map(), numberFormat = 'international') {
-    let normalizedSource = source.trim();
+    let normalizedSource = source.trim().replace(/×/g, '*').replace(/÷/g, '/').replace(/[−–]/g, '-');
     const descriptive = normalizedSource.match(/^[\p{L}_][\p{L}\p{N}_ ]*\s+(\d[\d ,.]*[km]?)(\s*[+\-]\s*[\p{L}_][\p{L}\p{N}_ ]*\s+\d[\d ,.]*[km]?)+$/iu);
     if (descriptive) normalizedSource = normalizedSource.replace(/[\p{L}_][\p{L}\p{N}_ ]*\s+(?=\d)/gu, '');
     const tokens = tokenize(normalizedSource, variables, numberFormat);
@@ -121,6 +127,14 @@
       const token = take();
       if (!token) throw new CalculationError('Incomplete expression', true);
       if (token.type === 'number') return { value: token.value, percent: false };
+      if (token.type === 'function') {
+        if (take()?.type !== '(') throw new CalculationError('Missing opening parenthesis', true);
+        const argument = addition();
+        if (take()?.type !== ')') throw new CalculationError('Missing closing parenthesis', true);
+        if (token.value === 'sqrt' && argument.value < 0) throw new CalculationError('Square root of a negative number');
+        const apply = { sqrt: Math.sqrt, abs: Math.abs, round: Math.round, floor: Math.floor, ceil: Math.ceil }[token.value];
+        return { value: apply(argument.value), percent: false };
+      }
       if (token.type === '(') {
         const value = addition();
         if (take()?.type !== ')') throw new CalculationError('Missing closing parenthesis', true);

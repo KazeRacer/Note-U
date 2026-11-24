@@ -197,6 +197,7 @@
       if (marks.has('bold') || marks.has('strong')) html = `<strong>${html}</strong>`;
       if (marks.has('italic') || marks.has('em')) html = `<em>${html}</em>`;
       if (marks.has('strike') || marks.has('strikethrough')) html = `<s>${html}</s>`;
+      if (marks.has('underline')) html = `<u>${html}</u>`;
       if (marks.has('highlight') || marks.has('mark')) html = `<mark>${html}</mark>`;
 
       const href = segment?.href ?? segment?.url ?? segment?.link?.href ?? segment?.link;
@@ -242,7 +243,8 @@
       code: 'code',
       'code-block': 'code',
       calculator: 'calculator',
-      calc: 'calculator'
+      calc: 'calculator',
+      callout: 'callout'
     };
     return mappings[normalized] || 'paragraph';
   }
@@ -258,89 +260,13 @@
     ) || '<br>';
   }
 
-  function blockShell(type, indent, id, mainHtml, extraAttributes = '') {
-    return `
-      <div class="block" data-type="${type}" data-indent="${indent}" data-block-id="${escapeHtml(id)}" ${extraAttributes}>
-        <button type="button" class="block-handle" tabindex="-1" contenteditable="false" data-drag-handle="true" aria-label="Block actions">⋮⋮</button>
-        <div class="block-main">${mainHtml}</div>
-      </div>
-    `.trim();
-  }
-
-  function legacyBlockToHtml(block, index = 0) {
-    const type = mapLegacyBlockType(block?.type ?? block?.kind ?? block?.blockType);
-    const indent = Math.max(0, Math.min(8, Number.parseInt(block?.indent ?? block?.depth ?? block?.level ?? 0, 10) || 0));
-    const id = block?.id || `legacy-${index}`;
-    const content = legacyBlockContent(block);
-
-    if (type === 'divider') {
-      return blockShell(type, indent, id, '<hr class="block-divider" contenteditable="false">');
-    }
-
-    if (type === 'toggle') {
-      const title = richTextToHtml(
-        block?.title
-        ?? block?.titleSegments
-        ?? block?.summary
-        ?? block?.content
-        ?? block?.text
-        ?? ''
-      ) || '<br>';
-      const titleStyle = mapLegacyBlockType(block?.titleStyle || 'paragraph');
-      const open = block?.open === false ? 'false' : 'true';
-      const children = block?.children ?? block?.blocks ?? block?.body ?? [];
-      const childHtml = Array.isArray(children)
-        ? children.map((child, childIndex) => legacyBlockToHtml(child, childIndex)).join('')
-        : '';
-
-      return blockShell(
-        type,
-        indent,
-        id,
-        `<div class="toggle-row"><button type="button" class="toggle-caret" tabindex="-1" contenteditable="false" data-toggle-caret="true" aria-label="Toggle content">▶</button><div class="toggle-title" data-block-content="true" data-title-style="${titleStyle}">${title}</div></div><div class="toggle-body" data-toggle-body="true">${childHtml}</div>`,
-        `data-open="${open}"`
-      );
-    }
-
-    if (type === 'code') {
-      const plainText = block?.text ?? block?.content ?? block?.value ?? '';
-      return blockShell(type, indent, id, `<pre class="block-content code-content" data-block-content="true">${escapeHtml(Array.isArray(plainText) ? plainText.map((segment) => segment?.text ?? segment?.value ?? '').join('') : plainText)}</pre>`);
-    }
-
-    let prefix = '';
-    let extraAttributes = '';
-
-    if (type === 'bulleted-list') {
-      prefix = '<span class="list-marker" contenteditable="false" aria-hidden="true">•</span>';
-    } else if (type === 'numbered-list') {
-      prefix = '<span class="list-marker" contenteditable="false" aria-hidden="true">1.</span>';
-    } else if (type === 'checklist') {
-      const checked = Boolean(block?.checked ?? block?.done ?? block?.completed);
-      prefix = `<label class="check-marker" contenteditable="false"><input type="checkbox" aria-label="Complete item" ${checked ? 'checked' : ''}></label>`;
-      extraAttributes = `data-checked="${checked ? 'true' : 'false'}"`;
-    }
-
-    return blockShell(
-      type,
-      indent,
-      id,
-      `<div class="block-row">${prefix}<div class="block-content" data-block-content="true">${content}</div></div>`,
-      extraAttributes
-    );
-  }
-
-  function structuredBlocksToHtml(blocks) {
-    if (!Array.isArray(blocks)) return '';
-    return blocks.map((block, index) => legacyBlockToHtml(block, index)).join('');
-  }
-
   function sanitizeInlineHtml(html) {
     if (typeof html !== 'string' || !html.trim()) return '';
 
     if (typeof document === 'undefined') {
       return html
         .replace(/<(?:img|picture|source|video|audio|iframe|object|embed|script|style|link|meta|svg|math|canvas|form|input)\b[^>]*>(?:[\s\S]*?<\/[^>]+>)?/gi, '')
-        .replace(/<(?!\/?(?:a|br|strong|b|em|i|s|strike|mark|code|span)\b)[^>]+>/gi, '')
+        .replace(/<(?!\/?(?:a|br|strong|b|em|i|u|s|strike|mark|code|span)\b)[^>]+>/gi, '')
         .replace(/<(?!a\b)([a-z]+)\b[^>]*>/gi, '<$1>')
         .replace(/<a\b[^>]*href=(['"])(.*?)\1[^>]*>/gi, (match, quote, href) => (
           /^(https?:|mailto:|tel:)/i.test(href)
@@ -353,7 +279,7 @@
     template.innerHTML = html;
 
     const allowedTags = new Set([
-      'A', 'BR', 'STRONG', 'B', 'EM', 'I', 'S', 'STRIKE', 'MARK', 'CODE', 'SPAN'
+      'A', 'BR', 'STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE', 'MARK', 'CODE', 'SPAN'
     ]);
     const discardedTags = new Set([
       'IMG', 'PICTURE', 'SOURCE', 'VIDEO', 'AUDIO', 'IFRAME', 'OBJECT', 'EMBED',
@@ -404,7 +330,8 @@
     quote: 'q',
     divider: 'hr',
     code: 'cd',
-    calculator: 'ca'
+    calculator: 'ca',
+    callout: 'co'
   });
 
   const CODE_BLOCK_TYPES = Object.freeze(
@@ -630,9 +557,9 @@
     }
   }
 
-  function encodeNote(note) {
+  function serializeNote(note) {
     const normalized = normalizeNote(note);
-    const compactPayload = {
+    return JSON.stringify({
       v: CURRENT_VERSION,
       t: normalized.title,
       e: normalized.icon,
@@ -640,14 +567,83 @@
       b: normalized.blocks.length
         ? normalized.blocks.map(compactBlock)
         : normalized.body || []
-    };
-
-    return encodeUtf8(JSON.stringify(compactPayload));
+    });
   }
 
-  function writeToUrl(note, options = {}) {
+  function encodeNote(note) {
+    return encodeUtf8(serializeNote(note));
+  }
+
+  // Compressed payloads start with a character outside the base64url alphabet, so
+  // they can never be confused with any earlier plain format.
+  const COMPRESSED_PREFIX = '~';
+  const MAX_DECOMPRESSED_BYTES = 8 * 1024 * 1024;
+
+  function compressionAvailable() {
+    return typeof CompressionStream === 'function'
+      && typeof DecompressionStream === 'function'
+      && typeof Blob === 'function'
+      && typeof Response === 'function';
+  }
+
+  async function readStreamLimited(stream, limit) {
+    const reader = stream.getReader();
+    const chunks = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > limit) {
+        await reader.cancel();
+        throw new Error('Decompressed payload is too large.');
+      }
+      chunks.push(value);
+    }
+    const result = new Uint8Array(total);
+    let offset = 0;
+    chunks.forEach((chunk) => {
+      result.set(chunk, offset);
+      offset += chunk.length;
+    });
+    return result;
+  }
+
+  async function deflateBytes(bytes) {
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+    return readStreamLimited(stream, MAX_DECOMPRESSED_BYTES);
+  }
+
+  async function inflateBytes(bytes) {
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return readStreamLimited(stream, MAX_DECOMPRESSED_BYTES);
+  }
+
+  async function encodeNoteAsync(note) {
+    const json = serializeNote(note);
+    const plain = encodeUtf8(json);
+    if (!compressionAvailable()) return plain;
+    try {
+      const packed = COMPRESSED_PREFIX + bytesToBase64Url(await deflateBytes(new TextEncoder().encode(json)));
+      return packed.length < plain.length ? packed : plain;
+    } catch {
+      return plain;
+    }
+  }
+
+  async function loadFromHashAsync(hash = window.location.hash) {
+    const value = hash.startsWith('#') ? hash.slice(1) : hash;
+    if (!value.startsWith(COMPRESSED_PREFIX)) return loadFromHash(hash);
+    try {
+      const bytes = await inflateBytes(base64UrlToBytes(value.slice(COMPRESSED_PREFIX.length)));
+      return parseJsonPayload(new TextDecoder().decode(bytes));
+    } catch {
+      return cloneDefaultNote();
+    }
+  }
+
+  function writeEncodedToUrl(encoded, options = {}) {
     const { replace = true } = options;
-    const encoded = encodeNote(note);
     const nextUrl = `${window.location.pathname}${window.location.search}#${encoded}`;
 
     if (replace) {
@@ -657,6 +653,10 @@
     }
 
     return window.location.href;
+  }
+
+  function writeToUrl(note, options = {}) {
+    return writeEncodedToUrl(encodeNote(note), options);
   }
 
   function clearUrl(options = {}) {
@@ -679,7 +679,10 @@
     sanitizeInlineHtml,
     normalizeBlocks,
     loadFromHash,
+    loadFromHashAsync,
     encodeNote,
+    encodeNoteAsync,
+    writeEncodedToUrl,
     writeToUrl,
     clearUrl
   });

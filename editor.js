@@ -3,7 +3,7 @@
 
   const TYPES = new Set([
     'paragraph', 'heading-1', 'heading-2', 'heading-3', 'bulleted-list',
-    'numbered-list', 'checklist', 'toggle', 'quote', 'code', 'divider', 'calculator'
+    'numbered-list', 'checklist', 'toggle', 'quote', 'code', 'divider', 'calculator', 'callout'
   ]);
   const CONTINUATION_TYPES = new Set([
     'bulleted-list', 'numbered-list', 'checklist', 'quote', 'code'
@@ -13,10 +13,32 @@
     ['``` ', 'code'], ['--- ', 'divider'], ['== ', 'calculator'], ['[ ] ', 'checklist'],
     ['[] ', 'checklist'], ['### ', 'heading-3'], ['## ', 'heading-2'],
     ['# ', 'heading-1'], ['1. ', 'numbered-list'], ['- ', 'bulleted-list'],
-    ['> ', 'toggle']
+    ['> ', 'toggle'], ['* ', 'bulleted-list'], ['+ ', 'bulleted-list'], ['1) ', 'numbered-list'],
+    ['[x] ', 'checklist'], ['" ', 'quote']
   ]);
+  const INLINE_MARKDOWN_RULES = [
+    { pattern: /\*\*(?=\S)([^*]+?)(?<=\S)\*\*$/, tag: 'strong' },
+    { pattern: /(?<![\w*])\*(?=[^\s*])([^*]+?)(?<=[^\s*])\*$/, tag: 'em' },
+    { pattern: /(?<![\w_])_(?=[^\s_])([^_]+?)(?<=[^\s_])_$/, tag: 'em' },
+    { pattern: /~~(?=\S)([^~]+?)(?<=\S)~~$/, tag: 's' },
+    { pattern: /==(?=\S)([^=]+?)(?<=\S)==$/, tag: 'mark' },
+    { pattern: /`([^`]+)`$/, tag: 'code' },
+    { pattern: /\[([^\]]+)\]\(((?:https?:\/\/|mailto:|tel:)[^\s)]+)\)$/, tag: 'a' }
+  ];
+  const ZERO_WIDTH = '\u200B';
   const URL_PATTERN = /https?:\/\/[^\s<]+/gi;
   const SELECT_ALL_WINDOW = 1200;
+
+  function countText(value) {
+    const text = String(value ?? '').replace(/\u200B/g, '');
+    const words = text.split(/\s+/).filter((word) => /[\p{L}\p{N}]/u.test(word)).length;
+    const flat = text.replace(/\r?\n/g, '');
+    return {
+      words,
+      characters: Array.from(flat).length,
+      charactersNoSpaces: Array.from(flat.replace(/\s/g, '')).length
+    };
+  }
 
   function createEditor(options = {}) {
     const {
@@ -25,7 +47,9 @@
       onRequestMenu = () => {},
       onCloseMenu = () => {},
       onSelectionChange = () => {},
-      numberFormat = 'international'
+      numberFormat = 'international',
+      localize = (text) => text,
+      notify = () => {}
     } = options;
     if (!(root instanceof HTMLElement)) throw new Error('NoteEditor requires a valid root element.');
 
@@ -46,6 +70,8 @@
     let calculatorNumberFormat = numberFormat === 'european' ? 'european' : 'international';
     let preferredCaretX = null;
     let structuralSelectionMode = null;
+    let lastRecordTime = 0;
+    let lastRecordTyping = false;
 
     root.contentEditable = 'false';
 
@@ -176,6 +202,14 @@
           marker.textContent = type === 'bulleted-list' ? '•' : '1.';
           row.append(marker);
         }
+        if (type === 'callout') {
+          const icon = document.createElement('span');
+          icon.className = 'callout-icon';
+          icon.contentEditable = 'false';
+          icon.setAttribute('aria-hidden', 'true');
+          icon.textContent = '💡';
+          row.append(icon);
+        }
         if (type === 'checklist') {
           const label = document.createElement('label');
           label.className = 'check-marker';
@@ -238,8 +272,11 @@
         output.classList.toggle('is-incomplete', Boolean(result.incomplete));
         output.disabled = result.value === undefined;
         output.dataset.literal = result.literal || '';
-        output.textContent = result.error ? `Error: ${result.error}` : result.formatted || result.warning || '';
-        const status = result.error || result.warning || (result.formatted ? `Result: ${result.formatted}` : 'No result');
+        output.textContent = result.error
+          ? `${localize('Error')}: ${localize(result.error)}`
+          : result.formatted || localize(result.warning || '');
+        const status = localize(result.error || result.warning || '')
+          || (result.formatted ? `${localize('Result')}: ${result.formatted}` : localize('No result'));
         output.setAttribute('aria-label', status);
         input.setAttribute('aria-describedby', `${block.dataset.blockId}-result-${index}`);
         output.id = `${block.dataset.blockId}-result-${index}`;
@@ -320,6 +357,39 @@
         preferredX: position.preferredX,
         element: surface
       };
+    }
+
+    function captureCaret() {
+      const selection = window.getSelection();
+      if (!selection?.rangeCount || !selection.isCollapsed) return null;
+      const anchor = selection.anchorNode;
+      const element = anchor?.nodeType === Node.ELEMENT_NODE ? anchor : anchor?.parentElement;
+      const content = element?.closest?.('[data-block-content]');
+      if (!content || !root.contains(content)) return null;
+      const position = positionFromSelection(content);
+      return position ? { blockId: position.blockId, rowId: position.rowId, offset: position.offset } : null;
+    }
+
+    function restoreCaret(caret) {
+      const fallback = () => focus(contentOf(root.querySelector('.block')), true);
+      if (!caret?.blockId) { fallback(); return; }
+      const block = [...root.querySelectorAll('.block')].find((item) => item.dataset.blockId === caret.blockId);
+      let surface = block ? contentOf(block) : null;
+      if (block?.dataset.type === 'calculator' && caret.rowId) {
+        surface = [...block.querySelectorAll('.calculator-row')]
+          .find((row) => row.dataset.rowId === caret.rowId)?.querySelector('.calculator-input') || surface;
+      }
+      if (!surface) { fallback(); return; }
+      const point = textPointAtOffset(surface, caret.offset);
+      const range = document.createRange();
+      range.setStart(point.node, point.offset);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      surface.focus({ preventScroll: true });
+      saveSelection();
+      surface.scrollIntoView?.({ block: 'nearest' });
     }
 
     function caretRect() {
@@ -544,7 +614,8 @@
       } else if (type === 'code') {
         if (content.textContent) result.text = content.textContent;
       } else if (type !== 'divider') {
-        if (content.innerHTML && content.innerHTML !== '<br>') result.html = content.innerHTML;
+        const html = content.innerHTML.replace(/\u200B/g, '');
+        if (html && html !== '<br>') result.html = html;
       }
       if (type === 'checklist' && block.dataset.checked === 'true') result.checked = true;
       if (type === 'toggle') {
@@ -566,12 +637,22 @@
       return JSON.stringify(serialize());
     }
 
-    function recordHistory() {
+    function recordHistory(typing = false) {
       if (restoringHistory) return;
       const data = snapshot();
-      if (history[historyIndex] === data) return;
+      if (history[historyIndex]?.data === data) return;
+      const now = Date.now();
+      const entry = { data, caret: captureCaret() };
+      const coalesce = typing && lastRecordTyping && historyIndex > 0
+        && historyIndex === history.length - 1 && now - lastRecordTime < 900;
+      lastRecordTyping = typing;
+      lastRecordTime = now;
+      if (coalesce) {
+        history[historyIndex] = entry;
+        return;
+      }
       history = history.slice(0, historyIndex + 1);
-      history.push(data);
+      history.push(entry);
       if (history.length > 200) history.shift();
       historyIndex = history.length - 1;
     }
@@ -589,11 +670,11 @@
       });
     }
 
-    function changed() {
+    function changed(options = {}) {
       if (suppressChanges) return;
       ensureEditor();
       refreshNumbers();
-      recordHistory();
+      recordHistory(Boolean(options.typing));
       onChange(serialize());
     }
 
@@ -631,8 +712,9 @@
       refreshNumbers();
       suppressChanges = false;
       if (!preserveHistory) {
-        history = [snapshot()];
+        history = [{ data: snapshot(), caret: null }];
         historyIndex = 0;
+        lastRecordTyping = false;
       }
     }
 
@@ -641,9 +723,10 @@
       if (next < 0 || next >= history.length) return;
       restoringHistory = true;
       historyIndex = next;
-      load(JSON.parse(history[next]), true);
+      lastRecordTyping = false;
+      load(JSON.parse(history[next].data), true);
       restoringHistory = false;
-      focus(contentOf(root.querySelector('.block')), true);
+      restoreCaret(history[next].caret);
       onChange(serialize());
     }
 
@@ -753,6 +836,11 @@
         changed();
         return;
       }
+      if ((event.ctrlKey || event.metaKey) && block.dataset.type === 'toggle' && content.classList.contains('toggle-title')) {
+        block.dataset.open = block.dataset.open === 'true' ? 'false' : 'true';
+        changed();
+        return;
+      }
       if (event.shiftKey) {
         insertText('\n');
         changed();
@@ -779,9 +867,18 @@
         return;
       }
       if (type === 'paragraph' && empty(content) && exitToggle(block)) return;
+      if (empty(content) && CONTINUATION_TYPES.has(type) && block.parentElement?.closest('.block')) {
+        // An empty nested item first steps out one level, like Notion does.
+        indentBlocks(block, true);
+        return;
+      }
       if (empty(content) && (CONTINUATION_TYPES.has(type) || HEADING_TYPES.has(type))) {
         const paragraph = replace(block, 'paragraph');
         focus(contentOf(paragraph));
+        return;
+      }
+      if (type === 'callout') {
+        split(block, content, 'paragraph');
         return;
       }
       const nextType = HEADING_TYPES.has(type) ? 'paragraph' : type;
@@ -829,9 +926,18 @@
         delete block.dataset.exitedContainer;
         return;
       }
+      indentBlocks(block, event.shiftKey);
+    }
+
+    function indentBlocks(block, shouldOutdent) {
       const blocks = selectedBlocks(block);
-      const moved = event.shiftKey ? outdent(blocks) : indent(blocks);
-      if (moved) changed();
+      const caret = captureCaret();
+      const moved = shouldOutdent ? outdent(blocks) : indent(blocks);
+      if (!moved) return false;
+      changed();
+      if (caret) restoreCaret(caret);
+      else focus(contentOf(blocks[0]), true);
+      return true;
     }
 
     function caretAtStart(content) {
@@ -1066,39 +1172,6 @@
     }
 
 
-    function caretAtEnd(content) {
-      const selection = window.getSelection();
-      if (!selection?.isCollapsed || !selection.rangeCount) return false;
-      const range = selection.getRangeAt(0);
-      const after = document.createRange();
-      after.selectNodeContents(content);
-      after.setStart(range.endContainer, range.endOffset);
-      return after.toString() === '';
-    }
-
-    function deleteForward(event, block, content) {
-      if (!caretAtEnd(content)) return;
-      const next = block.nextElementSibling;
-      if (!next?.classList.contains('block')) return;
-      const nextContent = contentOf(next);
-      event.preventDefault();
-      if (!nextContent || next.dataset.type === 'divider') {
-        const range = document.createRange();
-        range.selectNode(next);
-        const selection = window.getSelection();
-        selection.removeAllRanges();
-        selection.addRange(range);
-        return;
-      }
-      if (content.innerHTML === '<br>') content.replaceChildren();
-      [...nextContent.childNodes].forEach((node) => content.append(node));
-      const children = childContainer(next, false);
-      if (children) [...children.children].forEach((child) => childContainer(block).append(child));
-      next.remove();
-      focus(content, true);
-      changed();
-    }
-
     function normalizedText(content) {
       return (content.textContent || '').replace(/\u200B/g, '').replace(/\u00A0/g, ' ');
     }
@@ -1121,6 +1194,12 @@
       if (target === 'calculator' && block.dataset.type !== 'paragraph') return false;
       content.innerHTML = '<br>';
       const transformed = replace(block, target);
+      if (text === '[x] ' && transformed?.dataset.type === 'checklist') {
+        transformed.dataset.checked = 'true';
+        const box = transformed.querySelector('input[type="checkbox"]');
+        if (box) box.checked = true;
+        changed();
+      }
       if (target === 'divider') {
         const paragraph = createBlock();
         transformed.insertAdjacentElement('afterend', paragraph);
@@ -1132,7 +1211,7 @@
 
     function slash(block, content) {
       const text = normalizedText(content);
-      if (!text.startsWith('/') || text.includes('\n')) {
+      if (block.dataset.type === 'code' || !text.startsWith('/') || text.includes('\n')) {
         onCloseMenu();
         return;
       }
@@ -1144,13 +1223,176 @@
       saveSelection();
       onRequestMenu({
         mode: 'slash', block, query: text.slice(1),
-        x: rect?.left || fallback.left, y: (rect?.bottom || fallback.bottom) + 6
+        x: rect?.left || fallback.left, y: (rect?.bottom || fallback.bottom) + 6,
+        yAbove: (rect?.top || fallback.top) - 6
       });
+    }
+
+    function convertInlineMarkdown(content) {
+      const selection = window.getSelection();
+      if (!selection?.rangeCount || !selection.isCollapsed) return false;
+      const node = selection.anchorNode;
+      if (node?.nodeType !== Node.TEXT_NODE || !content.contains(node)) return false;
+      if (node.parentElement.closest('code, a')) return false;
+      const offset = selection.anchorOffset;
+      const before = node.data.slice(0, offset);
+      for (const rule of INLINE_MARKDOWN_RULES) {
+        const match = rule.pattern.exec(before);
+        if (!match) continue;
+        const element = document.createElement(rule.tag);
+        if (rule.tag === 'a') {
+          element.href = match[2];
+          element.target = '_blank';
+          element.rel = 'noopener noreferrer';
+        }
+        element.textContent = match[1];
+        const after = node.data.slice(offset);
+        // A zero-width text node keeps the caret outside the new formatting element.
+        const tail = document.createTextNode(after || ZERO_WIDTH);
+        const fragment = document.createDocumentFragment();
+        if (match.index > 0) fragment.append(document.createTextNode(before.slice(0, match.index)));
+        fragment.append(element, tail);
+        node.replaceWith(fragment);
+        const range = document.createRange();
+        range.setStart(tail, after ? 0 : tail.data.length);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        return true;
+      }
+      return false;
+    }
+
+    function removeZeroWidthBeforeCaret() {
+      const selection = window.getSelection();
+      if (!selection?.isCollapsed || !selection.rangeCount) return false;
+      const { anchorNode: node, anchorOffset: offset } = selection;
+      if (node?.nodeType !== Node.TEXT_NODE || offset === 0 || node.data[offset - 1] !== ZERO_WIDTH) return false;
+      node.deleteData(offset - 1, 1);
+      return true;
+    }
+
+    function richSurface() {
+      const selection = window.getSelection();
+      if (!selection?.rangeCount) return null;
+      const anchor = selection.anchorNode;
+      const element = anchor?.nodeType === Node.ELEMENT_NODE ? anchor : anchor?.parentElement;
+      const content = element?.closest?.('[data-block-content]');
+      const block = blockFrom(content);
+      if (!content || !block || !root.contains(content)) return null;
+      return block.dataset.type === 'code' || block.dataset.type === 'calculator' ? null : content;
+    }
+
+    function inlineAncestor(node, tags, content) {
+      let current = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+      while (current && current !== content) {
+        if (tags.includes(current.tagName.toLowerCase())) return current;
+        current = current.parentElement;
+      }
+      return null;
+    }
+
+    function unwrapElement(element, selection) {
+      const first = element.firstChild;
+      const last = element.lastChild;
+      element.replaceWith(...element.childNodes);
+      if (!first || !last) return;
+      const range = document.createRange();
+      range.setStartBefore(first);
+      range.setEndAfter(last);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+
+    function formatInline(command) {
+      const content = richSurface();
+      if (!content) return false;
+      const selection = window.getSelection();
+      if (['bold', 'italic', 'underline', 'strikeThrough'].includes(command)) {
+        document.execCommand(command, false);
+      } else if (command === 'code' || command === 'highlight') {
+        const tag = command === 'code' ? 'code' : 'mark';
+        const range = selection.getRangeAt(0);
+        const existing = inlineAncestor(range.commonAncestorContainer, [tag], content);
+        if (existing) {
+          unwrapElement(existing, selection);
+        } else if (!range.collapsed) {
+          const element = document.createElement(tag);
+          element.append(range.extractContents());
+          range.insertNode(element);
+          range.selectNodeContents(element);
+          selection.removeAllRanges();
+          selection.addRange(range);
+        } else {
+          return false;
+        }
+      } else if (command === 'unlink') {
+        const range = selection.getRangeAt(0);
+        const anchor = inlineAncestor(range.commonAncestorContainer, ['a'], content);
+        if (anchor) unwrapElement(anchor, selection);
+        else document.execCommand('unlink', false);
+      } else if (command === 'clear') {
+        document.execCommand('removeFormat', false);
+        document.execCommand('unlink', false);
+        const range = selection.getRangeAt(0);
+        [...content.querySelectorAll('code, mark, u')]
+          .filter((element) => { try { return range.intersectsNode(element); } catch { return false; } })
+          .forEach((element) => element.replaceWith(...element.childNodes));
+      } else {
+        return false;
+      }
+      saveSelection();
+      changed();
+      return true;
+    }
+
+    function linkCommand() {
+      const content = richSurface();
+      if (!content) return false;
+      const selection = window.getSelection();
+      const range = selection.getRangeAt(0).cloneRange();
+      const existing = inlineAncestor(range.commonAncestorContainer, ['a'], content);
+      const selected = selection.toString().trim();
+      const suggested = existing?.getAttribute('href') || (/^https?:\/\//i.test(selected) ? selected : 'https://');
+      const url = window.prompt(localize('Link URL'), suggested);
+      if (url === null) return false;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      const value = url.trim();
+      if (!value) {
+        if (existing) { unwrapElement(existing, selection); changed(); }
+        return true;
+      }
+      if (!/^(https?:|mailto:|tel:)/i.test(value)) {
+        notify(localize('Use an http, https, mailto or tel link'));
+        return false;
+      }
+      if (existing) {
+        existing.setAttribute('href', value);
+      } else if (range.collapsed) {
+        const anchor = document.createElement('a');
+        anchor.href = value;
+        anchor.textContent = value;
+        range.insertNode(anchor);
+        range.setStartAfter(anchor);
+        range.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      } else {
+        document.execCommand('createLink', false, value);
+      }
+      content.querySelectorAll('a[href]').forEach((anchor) => {
+        anchor.target = '_blank';
+        anchor.rel = 'noopener noreferrer';
+      });
+      saveSelection();
+      changed();
+      return true;
     }
 
     function paste(event, block) {
       event.preventDefault();
-      const text = event.clipboardData?.getData('text/plain') || '';
+      const text = (event.clipboardData?.getData('text/plain') || '').replace(/\u200B/g, '');
       if (!text) return;
       if (block.dataset.type === 'calculator') {
         const content = event.target.closest('[data-calculator-line]');
@@ -1161,6 +1403,11 @@
         if (lines.length) focus(row.querySelector('.calculator-input'), true);
         recalculate(block); changed(); return;
       }
+      if (block.dataset.type === 'code') {
+        insertText(text.replace(/\r\n?/g, '\n'));
+        changed();
+        return;
+      }
       if (!text.includes('\n')) {
         const containsUrl = URL_PATTERN.test(text);
         URL_PATTERN.lastIndex = 0;
@@ -1170,15 +1417,22 @@
         changed();
         return;
       }
-      const lines = text.replace(/\r\n?/g, '\n').split('\n');
+      const normalized = text.replace(/\r\n?/g, '\n');
+      const parsed = window.NoteMarkdown
+        ? window.NoteMarkdown.parseMarkdown(normalized)
+        : normalized.split('\n').filter((line) => line.trim()).map((line) => ({ type: 'paragraph', html: escapeHtml(line) }));
+      if (!parsed.length) return;
       let point = block;
-      lines.forEach((line) => {
-        const next = createBlock('paragraph', { html: escapeHtml(line) });
-        point.insertAdjacentElement('afterend', next);
-        point = next;
+      let last = null;
+      parsed.forEach((data) => {
+        last = dataToBlock(data);
+        point.insertAdjacentElement('afterend', last);
+        point = last;
       });
-      if (empty(contentOf(block))) block.remove();
-      focus(contentOf(point), true);
+      const hasChildren = Boolean(childContainer(block, false)?.querySelector(':scope > .block'));
+      if (empty(contentOf(block)) && !hasChildren) block.remove();
+      const surfaces = last.querySelectorAll('[data-block-content]');
+      focus(surfaces[surfaces.length - 1] || contentOf(last), true);
       changed();
     }
 
@@ -1295,13 +1549,15 @@
       const block = suppliedBlock || activeMenuBlock || currentBlock();
       if (!block) return;
       if (command.startsWith('transform:')) {
-        const target = command.slice(10);
+        const requested = command.slice(10);
+        const toggleHeading = requested.match(/^toggle-(heading-[123])$/);
+        const target = toggleHeading ? 'toggle' : requested;
         const blocks = selectedBlocks(block);
         suppressChanges = true;
         const transformed = blocks.map((item) => {
           const content = contentOf(item);
           if (normalizedText(content).startsWith('/')) content.innerHTML = '<br>';
-          return replace(item, target);
+          return replace(item, target, toggleHeading ? { titleStyle: toggleHeading[1] } : {});
         });
         suppressChanges = false;
         changed();
@@ -1319,7 +1575,9 @@
       } else if (command.startsWith('toggle-title:') && block.dataset.type === 'toggle') {
         contentOf(block).dataset.titleStyle = command.slice(13);
         changed();
-      } else if (command === 'duplicate') duplicateBlocks(block);
+      } else if (command === 'indent') indentBlocks(block, false);
+      else if (command === 'outdent') indentBlocks(block, true);
+      else if (command === 'duplicate') duplicateBlocks(block);
       else if (command === 'delete') deleteBlocks(block);
       else if (command === 'move-up') moveBlocks(block, 'up');
       else if (command === 'move-down') moveBlocks(block, 'down');
@@ -1361,6 +1619,17 @@
         delete block.dataset.exitedContainer;
         return;
       }
+      if (event.key === 'Backspace' && removeZeroWidthBeforeCaret()) return;
+      const modifier = event.ctrlKey || event.metaKey;
+      if (modifier && !event.altKey) {
+        const key = event.key.toLowerCase();
+        const plain = block.dataset.type === 'code' || block.dataset.type === 'calculator';
+        if (plain && ['b', 'i', 'u', 'e', 'k'].includes(key)) { event.preventDefault(); return; }
+        if (key === 'e' && !event.shiftKey) { event.preventDefault(); formatInline('code'); return; }
+        if (key === 'h' && event.shiftKey) { event.preventDefault(); formatInline('highlight'); return; }
+        if (key === 's' && event.shiftKey) { event.preventDefault(); formatInline('strikeThrough'); return; }
+        if (key === 'k' && !event.shiftKey) { event.preventDefault(); linkCommand(); return; }
+      }
       if (selectAll(event, content)) return;
       if (event.key === 'Escape') { escapeSelection(event, block); return; }
       if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && verticalArrow(event, block, content)) return;
@@ -1373,6 +1642,9 @@
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault();
         undo(event.shiftKey ? 1 : -1);
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'y') {
+        event.preventDefault();
+        undo(1);
       } else if (event.key === 'Enter') enter(event, block, content);
       else if (event.key === 'Tab') tab(event, block);
       else if (event.key === 'Backspace') backspace(event, block, content);
@@ -1395,13 +1667,18 @@
       delete block.dataset.exitedContainer;
       if (event.isComposing || skipComposedShortcut) {
         skipComposedShortcut = false;
-        changed();
+        changed({ typing: true });
         return;
       }
       if (block.dataset.type !== 'code' && block.dataset.type !== 'calculator' && shortcut(block, content)) return;
-      if (block.dataset.type === 'calculator') { recalculate(block); changed(); return; }
+      if (block.dataset.type === 'calculator') { recalculate(block); changed({ typing: true }); return; }
+      if (block.dataset.type !== 'code' && event.inputType === 'insertText' && /^[*_~=`)]$/.test(event.data || '')
+        && convertInlineMarkdown(content)) {
+        changed();
+        return;
+      }
       slash(block, content);
-      changed();
+      changed({ typing: true });
     }, { signal });
 
     root.addEventListener('compositionend', () => { skipComposedShortcut = true; }, { signal });
@@ -1420,7 +1697,34 @@
       changed();
     }, { signal });
 
+    function focusNoteTail() {
+      const last = directBlocks(root).at(-1);
+      const hasChildren = Boolean(last && childContainer(last, false)?.querySelector(':scope > .block'));
+      if (last?.dataset.type === 'paragraph' && empty(contentOf(last)) && !hasChildren) {
+        focus(contentOf(last), true);
+        return;
+      }
+      const paragraph = createBlock('paragraph');
+      root.append(paragraph);
+      focus(contentOf(paragraph));
+      changed();
+    }
+
     root.addEventListener('click', (event) => {
+      const link = event.target.closest?.('a[href]');
+      if (link && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        window.open(link.href, '_blank', 'noopener,noreferrer');
+        return;
+      }
+      if (event.target === root) { focusNoteTail(); return; }
+      if (event.target.classList?.contains('toggle-body') && !event.target.querySelector(':scope > .block')) {
+        const paragraph = createBlock('paragraph');
+        event.target.append(paragraph);
+        focus(contentOf(paragraph));
+        changed();
+        return;
+      }
       const result = event.target.closest?.('.calculator-result:not(:disabled)');
       if (result) {
         event.preventDefault();
@@ -1449,7 +1753,7 @@
       activeMenuBlock = block;
       saveSelection();
       const rect = button.getBoundingClientRect();
-      onRequestMenu({ mode: 'context', block, query: '', x: rect.left, y: rect.bottom + 5 });
+      onRequestMenu({ mode: 'context', block, query: '', x: rect.left, y: rect.bottom + 5, yAbove: rect.top - 5 });
     }, { signal });
 
     root.addEventListener('pointerdown', (event) => {
@@ -1521,10 +1825,62 @@
       } else onSelectionChange(null);
     }, { signal });
 
+    function getStats() {
+      return [...root.querySelectorAll('[data-block-content]')].reduce((total, surface) => {
+        const stats = countText(surface.textContent);
+        total.words += stats.words;
+        total.characters += stats.characters;
+        total.charactersNoSpaces += stats.charactersNoSpaces;
+        return total;
+      }, { words: 0, characters: 0, charactersNoSpaces: 0 });
+    }
+
+    function getSelectionStats() {
+      const selection = window.getSelection();
+      if (!selection?.rangeCount || selection.isCollapsed || !selectionInEditor(selection)) return null;
+      const source = selection.getRangeAt(0);
+      let text = '';
+      root.querySelectorAll('[data-block-content]').forEach((surface) => {
+        try { if (!source.intersectsNode(surface)) return; } catch { return; }
+        const part = document.createRange();
+        part.selectNodeContents(surface);
+        if (source.compareBoundaryPoints(Range.START_TO_START, part) > 0) part.setStart(source.startContainer, source.startOffset);
+        if (source.compareBoundaryPoints(Range.END_TO_END, part) < 0) part.setEnd(source.endContainer, source.endOffset);
+        text += `${part.toString()} `;
+      });
+      return countText(text);
+    }
+
+    function openBlockPicker() {
+      let block = currentBlock();
+      // An empty text-like block is reused; anything else gets a fresh paragraph below it.
+      const reusable = block && !block.dataset.exitedContainer
+        && ['paragraph', 'heading-1', 'heading-2', 'heading-3', 'bulleted-list', 'numbered-list', 'checklist', 'quote', 'callout']
+          .includes(block.dataset.type)
+        && empty(contentOf(block));
+      if (!reusable) {
+        const paragraph = createBlock('paragraph');
+        if (block) block.insertAdjacentElement('afterend', paragraph);
+        else root.append(paragraph);
+        block = paragraph;
+      }
+      const content = contentOf(block);
+      focus(content);
+      insertText('/');
+      slash(block, content);
+      changed();
+    }
+
     load([]);
 
     return Object.freeze({
-      root, load, serialize,
+      root, load, serialize, getStats, getSelectionStats, formatInline, linkCommand, openBlockPicker,
+      undo: () => undo(-1),
+      redo: () => undo(1),
+      indentSelection: (shouldOutdent) => {
+        const block = currentBlock();
+        return block ? indentBlocks(block, Boolean(shouldOutdent)) : false;
+      },
       focus() { focus(contentOf(root.querySelector('.block')), true); },
       getCurrentBlock: currentBlock,
       getContentElement: contentOf,
@@ -1557,5 +1913,7 @@
     });
   }
 
-  window.NoteEditor = Object.freeze({ create: createEditor });
+  const api = Object.freeze({ create: createEditor, countText });
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+  if (typeof window !== 'undefined') window.NoteEditor = api;
 })();

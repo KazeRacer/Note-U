@@ -14,7 +14,7 @@ test('HTML and package versions match', () => {
 });
 
 test('every active runtime asset is cache-busted with the release version', () => {
-  for (const asset of ['style.css', 'storage.js', 'calculator.js', 'editor.js', 'ui.js', 'app.js']) {
+  for (const asset of ['style.css', 'storage.js', 'markdown.js', 'calculator.js', 'editor.js', 'ui.js', 'app.js']) {
     assert.match(html, new RegExp(`${asset.replace('.', '\\.') }\\?v=${packageData.version}`));
   }
 });
@@ -39,4 +39,29 @@ test('Share sends the note title and Copy link provides rich and plain formats',
   assert.match(app, /'text\/plain'/);
   assert.match(app, /'text\/uri-list'/);
   assert.match(app, /'text\/html'/);
+});
+
+test('the note never uses browser persistence APIs', () => {
+  for (const file of ['storage.js', 'markdown.js', 'calculator.js', 'editor.js', 'ui.js', 'app.js']) {
+    const source = fs.readFileSync(file, 'utf8');
+    assert.doesNotMatch(source, /localStorage|sessionStorage|indexedDB|document\.cookie|XMLHttpRequest|\bfetch\(/, file);
+  }
+});
+
+test('the page offers a discreet word and character counter', () => {
+  assert.match(html, /id="stats"/);
+  assert.match(app, /editor\.getStats\(\)/);
+  assert.match(app, /editor\.getSelectionStats\(\)/);
+});
+
+test('the note is compressed asynchronously and written synchronously only when the page closes', () => {
+  assert.match(app, /NoteStorage\.encodeNoteAsync/);
+  assert.match(app, /sequence !== saveSequence/);
+  assert.match(app, /addEventListener\('pagehide', saveSynchronously\)/);
+});
+
+test('the mobile editing bar and link popover exist in the shell', () => {
+  assert.match(html, /id="mobile-bar"/);
+  assert.match(html, /id="link-chip"/);
+  assert.match(html, /viewport-fit=cover/);
 });

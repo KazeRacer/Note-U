@@ -24,6 +24,24 @@
 Run JavaScript syntax checks with `npm run check`. The complete repeatable browser
 acceptance procedure is in [`tests/MANUAL_TEST_PLAN.md`](tests/MANUAL_TEST_PLAN.md).
 
+## What's new in 0.11.0
+
+- **Markdown everywhere.** Block shortcuts (`#`, `-`, `1.`, `[]`, `>`, `!`, ``` ``` ```,
+  `---`, `>>`) and inline shortcuts (`**bold**`, `*italic*`, `~~strike~~`, `==mark==`,
+  `` `code` ``, `[text](url)`) convert as you type. Pasted Markdown is parsed by
+  `markdown.js` into a real block tree; **More → Copy as Markdown** exports it again.
+- **New blocks.** Callout, toggle headings (H1–H3) and underline (Ctrl/Cmd+U) join
+  the existing toggles, calculators, code, quotes and to-dos.
+- **Shorter links.** Notes are deflate-compressed (`~` prefix) when that helps, using
+  the browser's built-in `CompressionStream`. Older uncompressed URLs still open, and
+  decompression is capped to guard against malicious payloads.
+- **Discreet counter** of words and characters at the bottom (selection-aware).
+- **Mobile.** A keyboard-attached formatting bar, a `+` button for blocks and
+  viewport-aware menus. The interface is English or Italian (browser language, or
+  `?lang=it` / `?lang=en`).
+- **Calculator.** Currency symbols are ignored and `sqrt`, `abs`, `round`, `floor`
+  and `ceil` are available.
+
 ## Editor architecture
 
 The editor renders the hierarchical block tree serialized by `storage.js`. Every

@@ -91,3 +91,20 @@ and `editor.js?v=0.10.0`; an older value means the new editor is not deployed.
   subtotals, totals, malformed input, and zero division at desktop and 375 px.
 - Reload copied calculator and legacy URLs. Confirm authored lines, hierarchy, and
   IDs survive while derived results and errors are rebuilt rather than serialized.
+
+
+## 0.11.0 acceptance
+
+- Type each block and inline Markdown shortcut; confirm the caret leaves the new
+  inline element, undo restores the literal text, and typing inside code does not convert.
+- Paste Markdown containing nested lists, fenced code, quotes and links; confirm a
+  real block tree. Use More → Copy as Markdown and re-paste: the structure must match.
+- Create callouts and toggle headings; reload the URL and confirm type, title style
+  and open state survive.
+- Write a long note and confirm the URL is compressed (`#~...`), reloads identically,
+  and that an old uncompressed URL still opens. A malformed `#~` payload must fail safely.
+- Confirm the counter updates while typing and switches to the selection count.
+- At 375 px with touch emulation: use the `+` button (an empty block is reused), the
+  formatting bar above the keyboard, the link chip, and the calculator one-line layout.
+- Switch `?lang=it` and `?lang=en`; check menus, placeholders, counter and calculator errors.
+- Click below the last block and confirm the caret lands in the note.

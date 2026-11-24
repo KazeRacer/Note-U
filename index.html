@@ -2,9 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-visual">
-  <meta name="color-scheme" content="light">
-  <meta name="application-version" content="0.10.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-visual">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)">
+  <meta name="application-version" content="0.11.0">
   <meta name="application-name" content="Note-U">
   <meta property="og:title" content="Note-U">
   <meta property="og:type" content="website">
@@ -15,23 +17,29 @@
     rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%8F%EF%B8%8F%3C/text%3E%3C/svg%3E"
   >
-  <link rel="stylesheet" href="style.css?v=0.10.0">
+  <link rel="stylesheet" href="style.css?v=0.11.0">
 </head>
 <body>
   <main class="page-shell">
     <div class="page-grid top-row">
       <div aria-hidden="true"></div>
       <div class="top-actions">
-        <label class="number-format-control">
-          <span>Number format</span>
-          <select id="number-format" aria-label="Calculator number format">
-            <option value="european">1.234,56</option>
-            <option value="international">1,234.56</option>
-          </select>
-        </label>
-        <button id="copy-link-button" class="button button-secondary" type="button">Copy link</button>
-        <button id="share-note-button" class="button button-secondary" type="button">Share</button>
-        <button id="new-note-button" class="button button-secondary" type="button">New note</button>
+        <button id="copy-link-button" class="button button-secondary" type="button" data-i18n="Copy link">Copy link</button>
+        <button id="share-note-button" class="button button-secondary" type="button" data-i18n="Share">Share</button>
+        <button id="new-note-button" class="button button-secondary" type="button" data-i18n="New note">New note</button>
+        <div class="more-wrap">
+          <button id="more-button" class="button button-secondary button-icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More" data-i18n-aria="More">⋯</button>
+          <div id="more-menu" class="more-menu" hidden role="menu">
+            <button id="copy-markdown-button" class="more-item" type="button" role="menuitem" data-i18n="Copy as Markdown">Copy as Markdown</button>
+            <label class="more-row">
+              <span data-i18n="Number format">Number format</span>
+              <select id="number-format" aria-label="Calculator number format">
+                <option value="european">1.234,56</option>
+                <option value="international">1,234.56</option>
+              </select>
+            </label>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -69,25 +77,50 @@
       </div>
     </section>
 
-    <p class="url-only-note">Your note exists only in this URL</p>
+    <p class="url-only-note" data-i18n="Your note exists only in this URL">Your note exists only in this URL</p>
   </main>
 
+  <div id="stats" class="stats" role="status" aria-live="off"></div>
+
   <div id="block-menu" class="block-menu" hidden role="menu" aria-label="Block menu"></div>
-  <div id="inline-toolbar" class="inline-toolbar" hidden role="toolbar" aria-label="Text formatting">
-    <button type="button" data-inline-command="bold" aria-label="Bold"><strong>B</strong></button>
-    <button type="button" data-inline-command="italic" aria-label="Italic"><em>I</em></button>
-    <button type="button" data-inline-command="strikeThrough" aria-label="Strikethrough"><s>S</s></button>
-    <button type="button" data-inline-command="highlight" aria-label="Highlight">Highlight</button>
-    <button type="button" data-inline-command="createLink" aria-label="Add link">Link</button>
-    <button type="button" data-inline-command="removeFormat" aria-label="Clear formatting">Clear</button>
+  <div id="inline-toolbar" class="inline-toolbar" hidden role="toolbar" aria-label="Text formatting" data-i18n-aria="Text formatting">
+    <button type="button" data-inline-command="bold" aria-label="Bold" data-i18n-aria="Bold" data-i18n-title="Bold" title="Bold"><strong>B</strong></button>
+    <button type="button" data-inline-command="italic" aria-label="Italic" data-i18n-aria="Italic" data-i18n-title="Italic" title="Italic"><em>I</em></button>
+    <button type="button" data-inline-command="underline" aria-label="Underline" data-i18n-aria="Underline" data-i18n-title="Underline" title="Underline"><u>U</u></button>
+    <button type="button" data-inline-command="strikeThrough" aria-label="Strikethrough" data-i18n-aria="Strikethrough" data-i18n-title="Strikethrough" title="Strikethrough"><s>S</s></button>
+    <button type="button" data-inline-command="code" aria-label="Code" data-i18n-aria="Code" data-i18n-title="Code" title="Code"><span class="tool-mono">&lt;/&gt;</span></button>
+    <button type="button" data-inline-command="highlight" aria-label="Highlight" data-i18n-aria="Highlight" data-i18n-title="Highlight" title="Highlight"><span class="tool-highlight">A</span></button>
+    <button type="button" data-inline-command="link" aria-label="Add link" data-i18n-aria="Add link" data-i18n-title="Add link" title="Add link">🔗</button>
+    <button type="button" data-inline-command="clear" aria-label="Clear formatting" data-i18n-aria="Clear formatting" data-i18n-title="Clear formatting" title="Clear formatting">✕</button>
+  </div>
+
+  <div id="link-chip" class="link-chip" hidden>
+    <a data-link-open href="about:blank" target="_blank" rel="noopener noreferrer" data-i18n="Open">Open</a>
+    <button type="button" data-link-action="edit" data-i18n="Edit">Edit</button>
+    <button type="button" data-link-action="remove" data-i18n="Remove">Remove</button>
+  </div>
+
+  <div id="mobile-bar" class="mobile-bar" hidden role="toolbar" aria-label="Editing tools" data-i18n-aria="Editing tools">
+    <button type="button" data-mobile-command="block" aria-label="Add block" data-i18n-aria="Add block">+</button>
+    <button type="button" data-mobile-command="outdent" aria-label="Outdent" data-i18n-aria="Outdent">⇤</button>
+    <button type="button" data-mobile-command="indent" aria-label="Indent" data-i18n-aria="Indent">⇥</button>
+    <button type="button" data-mobile-command="undo" aria-label="Undo" data-i18n-aria="Undo">↶</button>
+    <button type="button" data-mobile-command="redo" aria-label="Redo" data-i18n-aria="Redo">↷</button>
+    <span class="mobile-bar-separator" aria-hidden="true"></span>
+    <button type="button" data-mobile-command="bold" aria-label="Bold" data-i18n-aria="Bold"><strong>B</strong></button>
+    <button type="button" data-mobile-command="italic" aria-label="Italic" data-i18n-aria="Italic"><em>I</em></button>
+    <button type="button" data-mobile-command="code" aria-label="Code" data-i18n-aria="Code"><span class="tool-mono">&lt;/&gt;</span></button>
+    <button type="button" data-mobile-command="highlight" aria-label="Highlight" data-i18n-aria="Highlight"><span class="tool-highlight">A</span></button>
+    <button type="button" data-mobile-command="link" aria-label="Add link" data-i18n-aria="Add link">🔗</button>
   </div>
 
   <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 
-  <script src="storage.js?v=0.10.0" defer></script>
-  <script src="calculator.js?v=0.10.0" defer></script>
-  <script src="editor.js?v=0.10.0" defer></script>
-  <script src="ui.js?v=0.10.0" defer></script>
-  <script src="app.js?v=0.10.0" defer></script>
+  <script src="storage.js?v=0.11.0" defer></script>
+  <script src="markdown.js?v=0.11.0" defer></script>
+  <script src="calculator.js?v=0.11.0" defer></script>
+  <script src="editor.js?v=0.11.0" defer></script>
+  <script src="ui.js?v=0.11.0" defer></script>
+  <script src="app.js?v=0.11.0" defer></script>
 </body>
 </html>
