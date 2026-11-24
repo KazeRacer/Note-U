@@ -109,3 +109,14 @@ test('the empty favicon is the final icon picker choice', () => {
   const icons = app.match(/const ICONS = \[([\s\S]*?)\];/)?.[1];
   assert.match(icons, /'•',\s*''\s*$/);
 });
+
+test('tables are a first-class editor type with keyboard and toolbar handling', () => {
+  const editor = fs.readFileSync('editor.js', 'utf8');
+  assert.match(editor, /'callout', 'table'/);
+  assert.match(editor, /function tableKey\(event, block, content\)/);
+  assert.match(editor, /data-table-action|dataset\.tableAction/);
+  assert.match(editor, /block\.dataset\.type === 'table'[^\n]*tableKey/);
+  // Block shortcuts and the slash menu must not fire inside cells.
+  assert.match(editor, /!== 'table' && shortcut\(block, content\)/);
+  assert.match(editor, /if \(block\.dataset\.type !== 'table'\) slash\(block, content\)/);
+});

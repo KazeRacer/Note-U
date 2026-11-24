@@ -24,7 +24,15 @@
 Run JavaScript syntax checks with `npm run check`. The complete repeatable browser
 acceptance procedure is in [`tests/MANUAL_TEST_PLAN.md`](tests/MANUAL_TEST_PLAN.md).
 
-## What's new in 0.11.0
+## What's new in 0.12.0
+
+- **Tables.** `/table` inserts a Notion-style grid (header row, add/remove rows and
+  columns, paste from spreadsheets or Markdown). Cells hold the same inline formatting
+  as text, and there are intentionally no spreadsheet formulas: use a Calculator block.
+- **Theme.** More → Theme chooses Auto, Light or Dark. The choice is stored in the
+  note URL (`th`), never in browser storage.
+
+### 0.11.0
 
 - **Markdown everywhere.** Block shortcuts (`#`, `-`, `1.`, `[]`, `>`, `!`, ``` ``` ```,
   `---`, `>>`) and inline shortcuts (`**bold**`, `*italic*`, `~~strike~~`, `==mark==`,

@@ -3,7 +3,7 @@
 
   const TYPES = new Set([
     'paragraph', 'heading-1', 'heading-2', 'heading-3', 'bulleted-list',
-    'numbered-list', 'checklist', 'toggle', 'quote', 'code', 'divider', 'calculator', 'callout'
+    'numbered-list', 'checklist', 'toggle', 'quote', 'code', 'divider', 'calculator', 'callout', 'table'
   ]);
   const CONTINUATION_TYPES = new Set([
     'bulleted-list', 'numbered-list', 'checklist', 'quote', 'code'
@@ -182,6 +182,9 @@
         sheet.append(marker, list);
         main.append(sheet);
         recalculate(block);
+      } else if (type === 'table') {
+        block.dataset.header = data.header === false ? 'false' : 'true';
+        main.append(createTable(data));
       } else if (type === 'code') {
         const code = document.createElement('pre');
         code.className = 'block-content code-content';
@@ -229,6 +232,234 @@
       const container = childContainer(block);
       (data.children || []).forEach((child) => container.append(child));
       return block;
+    }
+
+    const TABLE_ACTIONS = [
+      ['add-row', '+ Row'], ['add-column', '+ Column'], ['delete-row', '− Row'],
+      ['delete-column', '− Column'], ['toggle-header', 'Header row'], ['delete-table', 'Delete table']
+    ];
+
+    function createTableCell(html = '') {
+      const cell = document.createElement('td');
+      const surface = editable('table-cell', html);
+      surface.setAttribute('role', 'textbox');
+      surface.setAttribute('aria-label', localize('Table cell'));
+      cell.append(surface);
+      return cell;
+    }
+
+    function createTableRow(values) {
+      const row = document.createElement('tr');
+      values.forEach((value) => row.append(createTableCell(value)));
+      return row;
+    }
+
+    // Builds the scrollable grid plus its discreet toolbar; cells are ordinary inline-rich editing hosts.
+    function createTable(data = {}) {
+      const valid = Array.isArray(data.cells) && data.cells.length && Array.isArray(data.cells[0]);
+      const grid = valid ? data.cells : [[data.html || '', '', ''], ['', '', ''], ['', '', '']];
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      const scroll = document.createElement('div');
+      scroll.className = 'table-scroll';
+      const table = document.createElement('table');
+      table.className = 'note-table';
+      const body = document.createElement('tbody');
+      grid.forEach((values) => body.append(createTableRow(values)));
+      table.append(body);
+      scroll.append(table);
+      const tools = document.createElement('div');
+      tools.className = 'table-tools';
+      tools.contentEditable = 'false';
+      TABLE_ACTIONS.forEach(([action, label]) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.tabIndex = -1;
+        button.dataset.tableAction = action;
+        button.textContent = localize(label);
+        tools.append(button);
+      });
+      wrap.append(scroll, tools);
+      return wrap;
+    }
+
+    function tableGrid(block) {
+      return [...block.querySelectorAll(':scope > .block-main tr')]
+        .map((row) => [...row.querySelectorAll('.table-cell')]);
+    }
+
+    function cellPosition(content) {
+      const block = blockFrom(content);
+      const grid = block ? tableGrid(block) : [];
+      for (let r = 0; r < grid.length; r += 1) {
+        const c = grid[r].indexOf(content);
+        if (c >= 0) return { r, c };
+      }
+      return null;
+    }
+
+    function surfaceKey(content) {
+      const row = content?.closest?.('.calculator-row');
+      if (row) return row.dataset.rowId;
+      if (content?.classList?.contains('table-cell')) {
+        const position = cellPosition(content);
+        return position ? `${position.r}:${position.c}` : '';
+      }
+      return '';
+    }
+
+    function surfaceByKey(block, key) {
+      if (block?.dataset.type === 'calculator') {
+        return [...block.querySelectorAll('.calculator-row')]
+          .find((row) => row.dataset.rowId === key)?.querySelector('.calculator-input') || null;
+      }
+      if (block?.dataset.type === 'table') {
+        const [r, c] = String(key).split(':').map(Number);
+        return tableGrid(block)[r]?.[c] || null;
+      }
+      return null;
+    }
+
+    function tableIsEmpty(block) {
+      return tableGrid(block).flat().every((cell) => empty(cell));
+    }
+
+    function placeCaretIn(surface, x, direction) {
+      const point = x == null
+        ? textPointAtOffset(surface, direction < 0 ? surface.textContent.length : 0)
+        : closestCaretAtX(surface, x, direction < 0 ? surface.textContent.length : 0);
+      const range = document.createRange();
+      range.setStart(point.node, point.offset);
+      range.collapse(true);
+      const selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      surface.focus({ preventScroll: true });
+      surface.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+      saveSelection();
+    }
+
+    function tableAction(block, action, content) {
+      const grid = tableGrid(block);
+      const cell = content || block._lastCell;
+      const position = (cell && cellPosition(cell)) || { r: 0, c: 0 };
+      const body = block.querySelector('tbody');
+      let target = null;
+      if (action === 'add-row') {
+        const row = createTableRow(Array(grid[0].length).fill(''));
+        grid[position.r][0].closest('tr').insertAdjacentElement('afterend', row);
+        target = row.children[position.c]?.firstElementChild;
+      } else if (action === 'add-column') {
+        grid.forEach((cells) => cells[position.c].closest('td').insertAdjacentElement('afterend', createTableCell('')));
+        target = tableGrid(block)[position.r][position.c + 1];
+      } else if (action === 'delete-row' && grid.length > 1) {
+        grid[position.r][0].closest('tr').remove();
+        target = tableGrid(block)[Math.min(position.r, grid.length - 2)][position.c];
+      } else if (action === 'delete-column' && grid[0].length > 1) {
+        grid.forEach((cells) => cells[position.c].closest('td').remove());
+        target = tableGrid(block)[position.r][Math.min(position.c, grid[0].length - 2)];
+      } else if (action === 'toggle-header') {
+        block.dataset.header = block.dataset.header === 'false' ? 'true' : 'false';
+        target = cell;
+      } else if (action === 'delete-table' || action.startsWith('delete-')) {
+        const paragraph = createBlock('paragraph');
+        block.replaceWith(paragraph);
+        ensureEditor();
+        focus(contentOf(paragraph));
+        changed();
+        return;
+      }
+      if (!body) return;
+      changed();
+      if (target) placeCaretIn(target, null, 1);
+    }
+
+    function pasteIntoTable(block, content, text) {
+      const rows = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n').map((line) => line.split('\t'));
+      const start = cellPosition(content);
+      if (!start) return;
+      rows.forEach((values, rowOffset) => {
+        values.forEach((value, columnOffset) => {
+          let grid = tableGrid(block);
+          while (grid.length <= start.r + rowOffset) {
+            block.querySelector('tbody').append(createTableRow(Array(grid[0].length).fill('')));
+            grid = tableGrid(block);
+          }
+          while (grid[0].length <= start.c + columnOffset && grid[0].length < 40) {
+            grid.forEach((cells) => cells.at(-1).closest('td').insertAdjacentElement('afterend', createTableCell('')));
+            grid = tableGrid(block);
+          }
+          const cell = grid[start.r + rowOffset]?.[start.c + columnOffset];
+          if (cell) cell.textContent = value.trim();
+          if (cell && !cell.textContent) cell.innerHTML = '<br>';
+        });
+      });
+      const last = tableGrid(block)[Math.min(start.r + rows.length - 1, tableGrid(block).length - 1)];
+      placeCaretIn(last[Math.min(start.c + rows.at(-1).length - 1, last.length - 1)], null, 1);
+      changed();
+    }
+
+    // Keyboard behavior for table cells: Tab/Enter/arrows move between cells, never across block boundaries by accident.
+    function tableKey(event, block, content) {
+      if (!content.classList.contains('table-cell')) return false;
+      const position = cellPosition(content);
+      if (!position) return false;
+      const grid = tableGrid(block);
+      const flat = grid.flat();
+      const index = flat.indexOf(content);
+      const collapsed = window.getSelection()?.isCollapsed;
+      const modifier = event.ctrlKey || event.metaKey;
+      if (event.key === 'Tab' && !modifier && !event.altKey) {
+        event.preventDefault();
+        if (event.shiftKey) {
+          if (flat[index - 1]) placeCaretIn(flat[index - 1], null, -1);
+        } else if (flat[index + 1]) {
+          placeCaretIn(flat[index + 1], null, 1);
+        } else tableAction(block, 'add-row', content);
+        return true;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        if (modifier) {
+          const paragraph = createBlock('paragraph');
+          block.insertAdjacentElement('afterend', paragraph);
+          focus(contentOf(paragraph));
+          changed();
+        } else if (event.shiftKey) {
+          insertText('\n');
+          changed();
+        } else if (grid[position.r + 1]) {
+          placeCaretIn(grid[position.r + 1][position.c], null, 1);
+        } else {
+          tableAction(block, 'add-row', content);
+        }
+        return true;
+      }
+      if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && collapsed && !modifier && !event.altKey && !event.shiftKey) {
+        const direction = event.key === 'ArrowUp' ? -1 : 1;
+        if (!visualBoundary(content, direction)) return false;
+        const x = caretRect()?.left;
+        const inside = grid[position.r + direction]?.[position.c];
+        const surfaces = visibleEditingSurfaces();
+        const outside = direction < 0
+          ? surfaces[surfaces.indexOf(flat[0]) - 1]
+          : surfaces[surfaces.indexOf(flat.at(-1)) + 1];
+        const target = inside || outside;
+        if (!target) return false;
+        event.preventDefault();
+        placeCaretIn(target, x, direction);
+        return true;
+      }
+      if (event.key === 'Backspace' && collapsed && caretAtStart(content)) {
+        event.preventDefault();
+        if (tableIsEmpty(block)) tableAction(block, 'delete-table', content);
+        return true;
+      }
+      if (event.key === 'Delete' && collapsed && caretAtEnd(content)) {
+        event.preventDefault();
+        return true;
+      }
+      return false;
     }
 
     function createCalculatorRow(text = '', rowId = id()) {
@@ -306,6 +537,8 @@
       directBlocks(container).forEach((block) => {
         if (block.dataset.type === 'calculator') {
           block.querySelectorAll(':scope > .block-main .calculator-input').forEach((surface) => result.push(surface));
+        } else if (block.dataset.type === 'table') {
+          tableGrid(block).flat().forEach((surface) => result.push(surface));
         } else {
           const surface = contentOf(block);
           if (surface) result.push(surface);
@@ -326,10 +559,11 @@
       range.setEnd(selection.anchorNode, selection.anchorOffset);
       const block = blockFrom(content);
       const row = content.closest('.calculator-row');
+      const key = surfaceKey(content);
       return {
         blockId: block?.dataset.blockId || '',
         surface: row ? 'calculator-row' : block?.dataset.type === 'code' ? 'code' : 'inline',
-        ...(row ? { rowId: row.dataset.rowId } : {}),
+        ...(key ? { rowId: key } : {}),
         offset: range.toString().length,
         affinity,
         preferredX: preferredCaretX
@@ -341,17 +575,17 @@
       const surfaces = visibleEditingSurfaces();
       const index = surfaces.findIndex((surface) => {
         const block = blockFrom(surface);
-        const row = surface.closest('.calculator-row');
-        return block?.dataset.blockId === position.blockId && (!position.rowId || row?.dataset.rowId === position.rowId);
+        return block?.dataset.blockId === position.blockId && (!position.rowId || surfaceKey(surface) === position.rowId);
       });
       const surface = surfaces[index + direction];
       if (!surface) return null;
       const block = blockFrom(surface);
       const row = surface.closest('.calculator-row');
+      const key = surfaceKey(surface);
       return {
         blockId: block.dataset.blockId,
         surface: row ? 'calculator-row' : block.dataset.type === 'code' ? 'code' : 'inline',
-        ...(row ? { rowId: row.dataset.rowId } : {}),
+        ...(key ? { rowId: key } : {}),
         offset: direction < 0 ? surface.textContent.length : 0,
         affinity: direction < 0 ? 'backward' : 'forward',
         preferredX: position.preferredX,
@@ -375,10 +609,7 @@
       if (!caret?.blockId) { fallback(); return; }
       const block = [...root.querySelectorAll('.block')].find((item) => item.dataset.blockId === caret.blockId);
       let surface = block ? contentOf(block) : null;
-      if (block?.dataset.type === 'calculator' && caret.rowId) {
-        surface = [...block.querySelectorAll('.calculator-row')]
-          .find((row) => row.dataset.rowId === caret.rowId)?.querySelector('.calculator-input') || surface;
-      }
+      if (caret.rowId) surface = surfaceByKey(block, caret.rowId) || surface;
       if (!surface) { fallback(); return; }
       const point = textPointAtOffset(surface, caret.offset);
       const range = document.createRange();
@@ -611,6 +842,12 @@
           id: row.dataset.rowId,
           text: row.querySelector('.calculator-input')?.textContent || ''
         }));
+      } else if (type === 'table') {
+        result.cells = tableGrid(block).map((cells) => cells.map((cell) => {
+          const html = cell.innerHTML.replace(/\u200B/g, '');
+          return html === '<br>' ? '' : html;
+        }));
+        if (block.dataset.header === 'false') result.header = false;
       } else if (type === 'code') {
         if (content.textContent) result.text = content.textContent;
       } else if (type !== 'divider') {
@@ -733,7 +970,7 @@
     function replace(block, targetType, data = {}) {
       if (!block) return null;
       const target = typeOf(targetType);
-      if (block.dataset.type === target && target !== 'toggle') return block;
+      if ((block.dataset.type === target && target !== 'toggle') || block.dataset.type === 'table') return block;
       const oldType = block.dataset.type;
       const content = contentOf(block);
       const children = [...childContainer(block, false)?.children || []];
@@ -1403,6 +1640,12 @@
         if (lines.length) focus(row.querySelector('.calculator-input'), true);
         recalculate(block); changed(); return;
       }
+      if (block.dataset.type === 'table') {
+        const content = event.target.closest('.table-cell');
+        if (content && /[\n\t]/.test(text.replace(/\n+$/, ''))) pasteIntoTable(block, content, text);
+        else { insertText(text); changed(); }
+        return;
+      }
       if (block.dataset.type === 'code') {
         insertText(text.replace(/\r\n?/g, '\n'));
         changed();
@@ -1632,6 +1875,7 @@
       }
       if (selectAll(event, content)) return;
       if (event.key === 'Escape') { escapeSelection(event, block); return; }
+      if (block.dataset.type === 'table' && event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && tableKey(event, block, content)) return;
       if ((event.key === 'ArrowUp' || event.key === 'ArrowDown') && verticalArrow(event, block, content)) return;
       if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && horizontalArrow(event, content)) return;
       if ((event.key === 'Backspace' || event.key === 'Delete') && !window.getSelection().isCollapsed) {
@@ -1670,14 +1914,14 @@
         changed({ typing: true });
         return;
       }
-      if (block.dataset.type !== 'code' && block.dataset.type !== 'calculator' && shortcut(block, content)) return;
+      if (block.dataset.type !== 'code' && block.dataset.type !== 'calculator' && block.dataset.type !== 'table' && shortcut(block, content)) return;
       if (block.dataset.type === 'calculator') { recalculate(block); changed({ typing: true }); return; }
       if (block.dataset.type !== 'code' && event.inputType === 'insertText' && /^[*_~=`)]$/.test(event.data || '')
         && convertInlineMarkdown(content)) {
         changed();
         return;
       }
-      slash(block, content);
+      if (block.dataset.type !== 'table') slash(block, content);
       changed({ typing: true });
     }, { signal });
 
@@ -1725,6 +1969,15 @@
         changed();
         return;
       }
+      const tool = event.target.closest?.('[data-table-action]');
+      if (tool) {
+        event.preventDefault();
+        const tableBlock = tool.closest('.block[data-type="table"]');
+        const active = document.activeElement?.classList?.contains('table-cell') && tableBlock.contains(document.activeElement)
+          ? document.activeElement : tableBlock._lastCell;
+        tableAction(tableBlock, tool.dataset.tableAction, active);
+        return;
+      }
       const result = event.target.closest?.('.calculator-result:not(:disabled)');
       if (result) {
         event.preventDefault();
@@ -1754,6 +2007,17 @@
       saveSelection();
       const rect = button.getBoundingClientRect();
       onRequestMenu({ mode: 'context', block, query: '', x: rect.left, y: rect.bottom + 5, yAbove: rect.top - 5 });
+    }, { signal });
+
+    // Toolbar buttons must not steal focus, otherwise the active cell would be lost on touch devices.
+    root.addEventListener('mousedown', (event) => {
+      if (event.target.closest?.('.table-tools')) event.preventDefault();
+    }, { signal });
+
+    root.addEventListener('focusin', (event) => {
+      const cell = event.target.closest?.('.table-cell');
+      const tableBlock = cell && blockFrom(cell);
+      if (tableBlock) tableBlock._lastCell = cell;
     }, { signal });
 
     root.addEventListener('pointerdown', (event) => {

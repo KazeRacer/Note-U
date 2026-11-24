@@ -18,6 +18,7 @@
   const moreMenu = document.getElementById('more-menu');
   const copyMarkdownButton = document.getElementById('copy-markdown-button');
   const numberFormatSelect = document.getElementById('number-format');
+  const themeSelect = document.getElementById('theme-select');
   const statsElement = document.getElementById('stats');
 
   const t = NoteUI.t;
@@ -41,6 +42,7 @@
   let saveSequence = 0;
   let isLoading = false;
   let currentNumberFormat = 'international';
+  let currentTheme = 'auto';
 
   function createFaviconUrl(icon) {
     if (!icon) {
@@ -84,12 +86,28 @@
     document.title = title || t('Untitled');
   }
 
+  // Manual theme override; "auto" removes the attribute so the system preference applies.
+  function setTheme(theme) {
+    currentTheme = theme === 'light' || theme === 'dark' ? theme : 'auto';
+    const root = document.documentElement;
+    if (currentTheme === 'auto') root.removeAttribute('data-theme');
+    else root.dataset.theme = currentTheme;
+    themeSelect.value = currentTheme;
+
+    const colors = { light: '#ffffff', dark: '#191919' };
+    document.querySelectorAll('meta[name="theme-color"]').forEach((meta) => {
+      const own = meta.getAttribute('media')?.includes('dark') ? colors.dark : colors.light;
+      meta.content = currentTheme === 'auto' ? own : colors[currentTheme];
+    });
+  }
+
   function readCurrentNote() {
     return {
       version: NoteStorage.CURRENT_VERSION,
       title: titleInput.value,
       icon: currentIcon,
       numberFormat: currentNumberFormat,
+      theme: currentTheme,
       blocks: editor.serialize()
     };
   }
@@ -185,6 +203,7 @@
       setIcon(normalized.icon, { save: false });
       currentNumberFormat = normalized.numberFormat;
       numberFormatSelect.value = currentNumberFormat;
+      setTheme(normalized.theme);
       editor.setNumberFormat(currentNumberFormat);
       editor.load(
         normalized.blocks.length
@@ -426,6 +445,10 @@
       setMoreMenuOpen(false);
       moreButton.focus();
     }
+  });
+  themeSelect.addEventListener('change', () => {
+    setTheme(themeSelect.value);
+    scheduleSave();
   });
   numberFormatSelect.addEventListener('change', () => {
     currentNumberFormat = numberFormatSelect.value === 'european' ? 'european' : 'international';

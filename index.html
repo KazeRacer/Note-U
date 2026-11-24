@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)">
-  <meta name="application-version" content="0.11.0">
+  <meta name="application-version" content="0.12.0">
   <meta name="application-name" content="Note-U">
   <meta property="og:title" content="Note-U">
   <meta property="og:type" content="website">
@@ -17,7 +17,7 @@
     rel="icon"
     href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9C%8F%EF%B8%8F%3C/text%3E%3C/svg%3E"
   >
-  <link rel="stylesheet" href="style.css?v=0.11.0">
+  <link rel="stylesheet" href="style.css?v=0.12.0">
 </head>
 <body>
   <main class="page-shell">
@@ -31,6 +31,14 @@
           <button id="more-button" class="button button-secondary button-icon" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="More" data-i18n-aria="More">⋯</button>
           <div id="more-menu" class="more-menu" hidden role="menu">
             <button id="copy-markdown-button" class="more-item" type="button" role="menuitem" data-i18n="Copy as Markdown">Copy as Markdown</button>
+            <label class="more-row">
+              <span data-i18n="Theme">Theme</span>
+              <select id="theme-select" aria-label="Theme" data-i18n-aria="Theme">
+                <option value="auto" data-i18n="Auto">Auto</option>
+                <option value="light" data-i18n="Light">Light</option>
+                <option value="dark" data-i18n="Dark">Dark</option>
+              </select>
+            </label>
             <label class="more-row">
               <span data-i18n="Number format">Number format</span>
               <select id="number-format" aria-label="Calculator number format">
@@ -116,11 +124,11 @@
 
   <div id="toast" class="toast" hidden role="status" aria-live="polite"></div>
 
-  <script src="storage.js?v=0.11.0" defer></script>
-  <script src="markdown.js?v=0.11.0" defer></script>
-  <script src="calculator.js?v=0.11.0" defer></script>
-  <script src="editor.js?v=0.11.0" defer></script>
-  <script src="ui.js?v=0.11.0" defer></script>
-  <script src="app.js?v=0.11.0" defer></script>
+  <script src="storage.js?v=0.12.0" defer></script>
+  <script src="markdown.js?v=0.12.0" defer></script>
+  <script src="calculator.js?v=0.12.0" defer></script>
+  <script src="editor.js?v=0.12.0" defer></script>
+  <script src="ui.js?v=0.12.0" defer></script>
+  <script src="app.js?v=0.12.0" defer></script>
 </body>
 </html>

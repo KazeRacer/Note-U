@@ -7,6 +7,7 @@
     title: 'Note',
     icon: '✏️',
     numberFormat: 'international',
+    theme: 'auto',
     body: '',
     blocks: Object.freeze([])
   });
@@ -244,7 +245,8 @@
       'code-block': 'code',
       calculator: 'calculator',
       calc: 'calculator',
-      callout: 'callout'
+      callout: 'callout',
+      table: 'table'
     };
     return mappings[normalized] || 'paragraph';
   }
@@ -331,12 +333,28 @@
     divider: 'hr',
     code: 'cd',
     calculator: 'ca',
-    callout: 'co'
+    callout: 'co',
+    table: 'tb'
   });
 
   const CODE_BLOCK_TYPES = Object.freeze(
     Object.fromEntries(Object.entries(BLOCK_TYPE_CODES).map(([type, code]) => [code, type]))
   );
+
+  const MAX_TABLE_ROWS = 200;
+  const MAX_TABLE_COLUMNS = 40;
+
+  // Tables are rectangular grids of sanitized inline HTML; malformed input degrades to an empty 2x2 grid.
+  function normalizeTableCells(raw) {
+    const rows = (Array.isArray(raw) ? raw : [])
+      .filter(Array.isArray)
+      .slice(0, MAX_TABLE_ROWS)
+      .map((row) => row.slice(0, MAX_TABLE_COLUMNS)
+        .map((cell) => (typeof cell === 'string' ? sanitizeInlineHtml(cell.slice(0, 10000)) : '')));
+    const width = Math.max(0, ...rows.map((row) => row.length));
+    if (!rows.length || !width) return [['', ''], ['', '']];
+    return rows.map((row) => [...row, ...Array(width - row.length).fill('')]);
+  }
 
   function normalizeBlock(block) {
     if (!block || typeof block !== 'object') {
@@ -355,6 +373,17 @@
 
     if (type === 'divider') {
       return { type, indent, ...(id ? { id } : {}), ...(children.length ? { children } : {}) };
+    }
+
+    if (type === 'table') {
+      return {
+        type,
+        indent,
+        cells: normalizeTableCells(block.cells ?? block.c),
+        header: block.header !== false && block.hd !== 0,
+        ...(id ? { id } : {}),
+        ...(children.length ? { children } : {})
+      };
     }
 
     if (type === 'code') {
@@ -439,6 +468,13 @@
       return compact;
     }
 
+    if (normalized.type === 'table') {
+      compact.c = normalized.cells;
+      if (!normalized.header) compact.hd = 0;
+      if (normalized.children?.length) compact.b = normalized.children.map(compactBlock);
+      return compact;
+    }
+
     if (normalized.type === 'code') {
       if (normalized.text) compact.v = normalized.text;
       if (normalized.children?.length) compact.b = normalized.children.map(compactBlock);
@@ -498,6 +534,9 @@
           ? value.e
           : DEFAULT_NOTE.icon,
       numberFormat,
+      theme: value.theme === 'light' || value.theme === 'dark'
+        ? value.theme
+        : value.th === 'l' ? 'light' : value.th === 'd' ? 'dark' : 'auto',
       body: sanitizeBodyHtml(
         typeof value.body === 'string'
           ? value.body
@@ -564,6 +603,7 @@
       t: normalized.title,
       e: normalized.icon,
       f: normalized.numberFormat === 'european' ? 'e' : 'i',
+      ...(normalized.theme === 'light' ? { th: 'l' } : normalized.theme === 'dark' ? { th: 'd' } : {}),
       b: normalized.blocks.length
         ? normalized.blocks.map(compactBlock)
         : normalized.body || []

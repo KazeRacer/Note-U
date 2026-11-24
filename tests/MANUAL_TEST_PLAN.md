@@ -93,7 +93,7 @@ and `editor.js?v=0.10.0`; an older value means the new editor is not deployed.
   IDs survive while derived results and errors are rebuilt rather than serialized.
 
 
-## 0.11.0 acceptance
+## 0.11.0–0.12.0 acceptance
 
 - Type each block and inline Markdown shortcut; confirm the caret leaves the new
   inline element, undo restores the literal text, and typing inside code does not convert.
@@ -108,3 +108,10 @@ and `editor.js?v=0.10.0`; an older value means the new editor is not deployed.
   formatting bar above the keyboard, the link chip, and the calculator one-line layout.
 - Switch `?lang=it` and `?lang=en`; check menus, placeholders, counter and calculator errors.
 - Click below the last block and confirm the caret lands in the note.
+- Tables: create with `/table`, type, then Tab (adds a row from the last cell), Enter
+  (cell below), Shift+Enter (line break), Ctrl/Cmd+Enter (exit), ArrowUp/Down across
+  rows and out of the table, Backspace at the start of a cell (no-op; deletes an
+  empty table). Use every toolbar button, paste TSV from a spreadsheet and Markdown
+  tables, copy as Markdown, reload, undo/redo, and scroll a wide table at 375 px.
+- Theme: More → Theme (Auto/Light/Dark). Reload and open the URL in another browser:
+  the choice must persist; Auto must follow the operating system again.

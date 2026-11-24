@@ -110,6 +110,26 @@
       const width = raw.match(/^ */)[0].length;
       const line = raw.slice(width);
 
+      if (line.includes('|') && index + 1 < lines.length && TABLE_SEPARATOR.test(lines[index + 1].trim())) {
+        const header = splitTableRow(line);
+        if (header.length && header.length === splitTableRow(lines[index + 1].trim()).length) {
+          const cells = [header];
+          while (index + 2 < lines.length && lines[index + 2].includes('|') && lines[index + 2].trim()) {
+            cells.push(splitTableRow(lines[index + 2].trim()));
+            index += 1;
+          }
+          index += 1;
+          const columns = Math.max(...cells.map((row) => row.length));
+          add(withChildren({
+            type: 'table',
+            header: true,
+            cells: cells.map((row) => [...row, ...Array(columns - row.length).fill('')].map(inlineToHtml))
+          }), depthFor(width));
+          lastQuote = null;
+          continue;
+        }
+      }
+
       const fence = line.match(/^(```|~~~)\s*([\w+-]*)\s*$/);
       if (fence) {
         const body = [];
@@ -118,7 +138,9 @@
           body.push(lines[index].replace(/\t/g, '  ').slice(Math.min(width, lines[index].match(/^ */)[0].length)));
           index += 1;
         }
-        add(withChildren({ type: 'code', text: body.join('\n') }), depthFor(width));
+        add(withChildren(fence[2].toLowerCase() === 'calc'
+          ? { type: 'calculator', lines: body.length ? body : [''] }
+          : { type: 'code', text: body.join('\n') }), depthFor(width));
         lastQuote = null;
         continue;
       }
@@ -179,6 +201,30 @@
     }
 
     return pruneEmptyChildren(root);
+  }
+
+  const TABLE_SEPARATOR = /^\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?$/;
+
+  // Splits a Markdown table row on unescaped pipes and drops the optional outer pipes.
+  function splitTableRow(line) {
+    const cells = [];
+    let current = '';
+    for (let position = 0; position < line.length; position += 1) {
+      const character = line[position];
+      if (character === '\\' && line[position + 1] === '|') {
+        current += '|';
+        position += 1;
+      } else if (character === '|') {
+        cells.push(current);
+        current = '';
+      } else {
+        current += character;
+      }
+    }
+    cells.push(current);
+    if (cells.length && !cells[0].trim()) cells.shift();
+    if (cells.length && !cells.at(-1).trim()) cells.pop();
+    return cells.map((cell) => cell.trim());
   }
 
   function pruneEmptyChildren(blocks) {
@@ -242,6 +288,17 @@
           case 'divider': out.push(`${pad}---`, ''); break;
           case 'code': out.push(`${pad}\`\`\``, ...String(block.text || '').split('\n').map((row) => `${pad}${row}`), `${pad}\`\`\``, ''); break;
           case 'calculator': out.push(`${pad}\`\`\`calc`, ...(block.lines || []).map((row) => `${pad}${row}`), `${pad}\`\`\``, ''); break;
+          case 'table': {
+            const rows = (block.cells || []).map((row) => row.map((cell) => htmlToMarkdown(cell)
+              .replace(/\|/g, '\\|').replace(/\n/g, '<br>')));
+            if (!rows.length) break;
+            const width = Math.max(...rows.map((row) => row.length));
+            const line = (row) => `${pad}| ${[...row, ...Array(width - row.length).fill('')].join(' | ')} |`;
+            const head = block.header === false ? Array(width).fill('') : rows[0];
+            out.push(line(head), `${pad}| ${Array(width).fill('---').join(' | ')} |`,
+              ...(block.header === false ? rows : rows.slice(1)).map(line), '');
+            break;
+          }
           case 'toggle': {
             const style = { 'heading-1': '# ', 'heading-2': '## ', 'heading-3': '### ' }[block.titleStyle] || '';
             out.push(`${pad}<details${block.open === false ? '' : ' open'}>`, `${pad}<summary>${style}${text}</summary>`, '');

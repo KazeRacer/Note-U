@@ -143,3 +143,47 @@ test('calculator lines and recursive children round-trip without derived state',
   assert.equal(loaded.blocks[0].results, undefined);
   assert.equal(loaded.blocks[0].errors, undefined);
 });
+
+test('tables round-trip as sanitized rectangular grids with their header flag', () => {
+  const storage = loadStorage();
+  const note = {
+    title: 'T',
+    blocks: [{
+      type: 'table',
+      header: false,
+      cells: [['<strong>a</strong>', 'b', '<script>x</script>c'], ['1']],
+      children: [{ type: 'paragraph', html: 'child' }]
+    }]
+  };
+  const loaded = storage.loadFromHash(`#${storage.encodeNote(note)}`);
+  const table = loaded.blocks[0];
+  assert.equal(table.type, 'table');
+  assert.equal(table.header, false);
+  assert.equal(JSON.stringify(table.cells[1]), JSON.stringify(['1', '', '']));
+  assert.doesNotMatch(JSON.stringify(table.cells), /<script/);
+  assert.match(table.cells[0][0], /<strong>a<\/strong>/);
+  assert.equal(table.children[0].html, 'child');
+});
+
+test('malformed or oversized table payloads degrade safely', () => {
+  const storage = loadStorage();
+  const empty = storage.normalizeNote({ blocks: [{ type: 'table', cells: 'nope' }] }).blocks[0];
+  assert.equal(JSON.stringify(empty.cells), JSON.stringify([['', ''], ['', '']]));
+  assert.equal(empty.header, true);
+  const huge = storage.normalizeNote({
+    blocks: [{ type: 'table', cells: Array.from({ length: 500 }, () => Array(100).fill('x')) }]
+  }).blocks[0];
+  assert.equal(huge.cells.length, 200);
+  assert.equal(huge.cells[0].length, 40);
+});
+
+test('the theme preference is stored only when it is not automatic', () => {
+  const storage = loadStorage();
+  assert.equal(JSON.parse(Buffer.from(storage.encodeNote({ title: 'x', blocks: [] }), 'base64url').toString()).th, undefined);
+  assert.equal(JSON.parse(Buffer.from(storage.encodeNote({ title: 'x', theme: 'dark', blocks: [] }), 'base64url').toString()).th, 'd');
+  const dark = storage.loadFromHash(`#${storage.encodeNote({ title: 'x', theme: 'dark', blocks: [] })}`);
+  const light = storage.loadFromHash(`#${storage.encodeNote({ title: 'x', theme: 'light', blocks: [] })}`);
+  const auto = storage.loadFromHash(`#${storage.encodeNote({ title: 'x', theme: 'neon', blocks: [] })}`);
+  assert.equal([dark.theme, light.theme, auto.theme].join(), 'dark,light,auto');
+  assert.equal(storage.loadFromHash('').theme, 'auto');
+});

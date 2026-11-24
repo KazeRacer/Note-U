@@ -79,3 +79,25 @@ test('exported Markdown can be imported back without losing structure', () => {
   const again = markdown.toMarkdown(markdown.parseMarkdown(source));
   assert.deepEqual(markdown.parseMarkdown(again), markdown.parseMarkdown(source));
 });
+
+test('Markdown tables become table blocks with escaped pipes and inline formatting', () => {
+  const blocks = markdown.parseMarkdown('Intro\n\n| Item | Qty |\n| --- | :-: |\n| **Bread** | 2 |\n| a\\|b |\n\nafter');
+  assert.deepEqual(blocks.map((block) => block.type), ['paragraph', 'table', 'paragraph']);
+  assert.deepEqual(blocks[1].cells, [['Item', 'Qty'], ['<strong>Bread</strong>', '2'], ['a|b', '']]);
+  assert.equal(blocks[1].header, true);
+});
+
+test('a lone line with pipes is not mistaken for a table', () => {
+  assert.deepEqual(markdown.parseMarkdown('a | b').map((block) => block.type), ['paragraph']);
+});
+
+test('tables export and re-import without losing cells', () => {
+  const table = { type: 'table', header: true, cells: [['H1', 'H2'], ['x|y', '<em>z</em>']] };
+  const output = markdown.toMarkdown([table]);
+  assert.match(output, /^\| H1 \| H2 \|\n\| --- \| --- \|\n\| x\\\|y \| \*z\* \|$/);
+  assert.deepEqual(markdown.parseMarkdown(output)[0].cells, [['H1', 'H2'], ['x|y', '<em>z</em>']]);
+});
+
+test('calc fences import as calculator blocks', () => {
+  assert.deepEqual(markdown.parseMarkdown('```calc\n1 + 1\n```'), [{ type: 'calculator', lines: ['1 + 1'] }]);
+});

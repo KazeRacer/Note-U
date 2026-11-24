@@ -37,7 +37,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']) {
     --text-main: rgba(255, 255, 255, 0.88);
     --text-soft: rgba(255, 255, 255, 0.68);
     --text-muted: rgba(255, 255, 255, 0.5);
@@ -61,6 +61,31 @@
     --menu-shadow: 0 14px 38px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
     color-scheme: dark;
   }
+}
+
+:root[data-theme='dark'] {
+  --text-main: rgba(255, 255, 255, 0.88);
+  --text-soft: rgba(255, 255, 255, 0.68);
+  --text-muted: rgba(255, 255, 255, 0.5);
+  --text-faint: rgba(255, 255, 255, 0.28);
+  --background: #191919;
+  --surface: #252525;
+  --hover: rgba(255, 255, 255, 0.07);
+  --active: rgba(255, 255, 255, 0.12);
+  --border: rgba(255, 255, 255, 0.13);
+  --selection: rgba(35, 131, 226, 0.42);
+  --blue: #4a9bf0;
+  --code-background: #252525;
+  --inline-code-background: rgba(255, 255, 255, 0.1);
+  --inline-code-color: #ff8a80;
+  --mark-background: rgba(255, 212, 0, 0.3);
+  --callout-background: #2a2a2a;
+  --calculator-background: rgba(74, 155, 240, 0.07);
+  --calculator-focus-background: rgba(74, 155, 240, 0.11);
+  --calculator-focus-border: rgba(74, 155, 240, 0.45);
+  --danger: #ff8a80;
+  --menu-shadow: 0 14px 38px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+  color-scheme: dark;
 }
 
 html {
@@ -594,6 +619,98 @@ a:focus-visible {
   line-height: 1.45;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* ---------------------------------------------------------------- Tables */
+.block[data-type="table"] {
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+
+.table-wrap {
+  min-width: 0;
+}
+
+.table-scroll {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.note-table {
+  width: 100%;
+  min-width: max-content;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: 0.95em;
+}
+
+.note-table td {
+  min-width: 7.5rem;
+  padding: 0;
+  border: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.table-cell {
+  min-height: 1.5em;
+  padding: 6px 9px;
+  line-height: 1.5;
+  outline: none;
+  overflow-wrap: anywhere;
+}
+
+.table-cell:focus {
+  background: var(--hover);
+  box-shadow: inset 0 0 0 1.5px var(--blue);
+}
+
+.block[data-type="table"][data-header="true"] tr:first-child td {
+  background: var(--callout-background);
+  font-weight: 600;
+}
+
+.table-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.block[data-type="table"]:focus-within .table-tools {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.table-tools button {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.table-tools button:hover {
+  background: var(--hover);
+  color: var(--text-main);
+}
+
+.table-tools button[data-table-action="delete-table"]:hover {
+  color: var(--danger);
+}
+
+@media (hover: none) {
+  .table-tools button {
+    padding: 7px 10px;
+  }
 }
 
 .block[data-type="code"] {
